@@ -1,0 +1,2 @@
+class SPAPIClient:
+    pass
