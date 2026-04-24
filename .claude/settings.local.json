@@ -5,7 +5,10 @@
       "Bash(grep -iE \"\\\\.\\(env|key|pem|secret|token\\)$\")",
       "Bash(echo \"exit:$?\")",
       "Bash(echo \"tracked data count: $?\")",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(python -m db.schema)",
+      "Bash(python *)",
+      "Bash(git *)"
     ]
   }
 }

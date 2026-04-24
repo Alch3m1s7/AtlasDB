@@ -48,3 +48,37 @@ def log_fatal_status(report_id: str, processing_status: str, status_body: dict) 
         "processingStatus": processing_status,
         "status_body": status_body,
     })
+
+
+def log_ingest_result(
+    source_file: str,
+    status: str,
+    expected_rows: int,
+    inserted_rows: int,
+    skipped_rows: int,
+    report_id: str | None = None,
+    report_document_id: str | None = None,
+    marketplace_id: str | None = None,
+    report_type: str | None = None,
+    reused_existing_report: bool | None = None,
+) -> None:
+    record: dict = {
+        "logged_at": datetime.now(timezone.utc).isoformat(),
+        "event": "INGEST_RESULT",
+        "source_file": source_file,
+        "status": status,
+        "expected_rows": expected_rows,
+        "inserted_rows": inserted_rows,
+        "skipped_rows": skipped_rows,
+    }
+    if report_id is not None:
+        record["report_id"] = report_id
+    if report_document_id is not None:
+        record["report_document_id"] = report_document_id
+    if marketplace_id is not None:
+        record["marketplace_id"] = marketplace_id
+    if report_type is not None:
+        record["report_type"] = report_type
+    if reused_existing_report is not None:
+        record["reused_existing_report"] = reused_existing_report
+    _append(record)

@@ -6,7 +6,7 @@ from reports.report_requests import create_report, get_report_status, get_recent
 from reports.report_downloads import get_report_document, download_report
 from reports.report_parsers import parse_fba_inventory_report
 from reports.report_exports import export_rows_to_jsonl
-from logs.report_logger import log_report_created, log_status_checked, log_report_downloaded, log_fatal_status
+from logs.report_logger import log_report_created, log_status_checked, log_report_downloaded, log_fatal_status, log_ingest_result
 from db.inventory_repository import insert_fba_inventory_snapshot_rows
 from db.inventory_queries import print_inventory_summary
 
@@ -145,6 +145,7 @@ def main():
     elif args.command == "ingest-local":
         rows = parse_fba_inventory_report(PARSE_FILE_PATH)
         valid_rows = [row for row in rows if row["_is_valid"]]
+        expected = len(valid_rows)
         export_rows_to_jsonl(rows, EXPORT_OUTPUT_PATH)
         inserted = insert_fba_inventory_snapshot_rows(
             rows=valid_rows,
@@ -154,6 +155,21 @@ def main():
             source_file=PARSE_FILE_PATH,
         )
         print(f"Inserted rows: {inserted}")
+        if expected > 0 and inserted == 0:
+            ingest_status = "SKIPPED_DUPLICATE"
+        elif inserted == expected:
+            ingest_status = "SUCCESS"
+        elif inserted > 0:
+            ingest_status = "PARTIAL"
+        else:
+            ingest_status = "FAILED"
+        log_ingest_result(
+            source_file=PARSE_FILE_PATH,
+            status=ingest_status,
+            expected_rows=expected,
+            inserted_rows=inserted,
+            skipped_rows=expected - inserted,
+        )
         print_inventory_summary()
 
     elif args.command == "ingest-spapi":
@@ -166,6 +182,8 @@ def main():
         # --- Step 1: Check for a recent DONE report before creating a new one ---
         document_id = None
         found_report_id = None
+        ingest_report_id = None
+        reused_existing_report = False
 
         recent_24h = get_recent_done_report(
             EU_BASE_URL, access_token, REPORT_TYPE, EU_UK_MARKETPLACE_ID,
@@ -175,6 +193,8 @@ def main():
         if recent_24h:
             document_id = recent_24h.get("reportDocumentId")
             found_report_id = recent_24h.get("reportId")
+            ingest_report_id = found_report_id
+            reused_existing_report = True
             print(f"Using existing DONE report from last 24h: reportId={found_report_id}")
         else:
             recent_48h = get_recent_done_report(
@@ -184,6 +204,8 @@ def main():
             if recent_48h:
                 document_id = recent_48h.get("reportDocumentId")
                 found_report_id = recent_48h.get("reportId")
+                ingest_report_id = found_report_id
+                reused_existing_report = True
                 print(
                     f"Using existing DONE report from last 48h; "
                     f"warning: older than preferred freshness: reportId={found_report_id}"
@@ -192,6 +214,8 @@ def main():
                 # --- Step 2: No recent DONE report — create one ---
                 report_id = create_report(EU_BASE_URL, access_token, EU_UK_MARKETPLACE_ID, REPORT_TYPE)
                 log_report_created("EU", EU_UK_MARKETPLACE_ID, REPORT_TYPE, report_id)
+                ingest_report_id = report_id
+                reused_existing_report = False
                 print(f"New report created: {report_id}")
 
                 done = False
@@ -266,6 +290,7 @@ def main():
         export_rows_to_jsonl(rows, jsonl_path)
         print(f"Exported: {jsonl_path}")
 
+        expected = len(valid_rows)
         inserted = insert_fba_inventory_snapshot_rows(
             rows=valid_rows,
             region="EU",
@@ -274,6 +299,26 @@ def main():
             source_file=raw_path,
         )
         print(f"Inserted rows: {inserted}")
+        if expected > 0 and inserted == 0:
+            ingest_status = "SKIPPED_DUPLICATE"
+        elif inserted == expected:
+            ingest_status = "SUCCESS"
+        elif inserted > 0:
+            ingest_status = "PARTIAL"
+        else:
+            ingest_status = "FAILED"
+        log_ingest_result(
+            source_file=raw_path,
+            status=ingest_status,
+            expected_rows=expected,
+            inserted_rows=inserted,
+            skipped_rows=expected - inserted,
+            report_id=ingest_report_id,
+            report_document_id=document_id,
+            marketplace_id=EU_UK_MARKETPLACE_ID,
+            report_type=REPORT_TYPE,
+            reused_existing_report=reused_existing_report,
+        )
         print_inventory_summary()
 
 

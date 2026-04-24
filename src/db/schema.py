@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS fba_inventory_imports (
     marketplace_code    TEXT NOT NULL,
     row_count           INTEGER NOT NULL,
     inserted_row_count  INTEGER NOT NULL,
+    skipped_rows        INTEGER NOT NULL DEFAULT 0,
     status              TEXT NOT NULL,
     error_message       TEXT,
     imported_at         TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -80,6 +81,9 @@ def run_migrations() -> None:
         )
         conn.execute(
             "ALTER TABLE fba_inventory_imports ADD COLUMN IF NOT EXISTS snapshot_id UUID;"
+        )
+        conn.execute(
+            "ALTER TABLE fba_inventory_imports ADD COLUMN IF NOT EXISTS skipped_rows INTEGER NOT NULL DEFAULT 0;"
         )
         conn.commit()
         print("Migrations applied successfully")

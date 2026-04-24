@@ -39,8 +39,8 @@ INSERT INTO fba_inventory_snapshots (
 INSERT_IMPORT_SQL = """
 INSERT INTO fba_inventory_imports (
     snapshot_id, source_file, region, marketplace_id, marketplace_code,
-    row_count, inserted_row_count, status, error_message
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    row_count, inserted_row_count, skipped_rows, status, error_message
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -126,12 +126,20 @@ def insert_fba_inventory_snapshot_rows(
         conn = get_connection()
         with conn.cursor() as cur:
             cur.executemany(INSERT_SNAPSHOT_SQL, params_list)
+        inserted_count = row_count  # executemany is all-or-nothing
+        skipped = row_count - inserted_count
+        if inserted_count == row_count:
+            import_status = "SUCCESS"
+        elif inserted_count > 0:
+            import_status = "PARTIAL"
+        else:
+            import_status = "FAILED"
         conn.execute(INSERT_IMPORT_SQL, (
             snapshot_id, source_file, region, marketplace_id, marketplace_code,
-            row_count, row_count, "SUCCESS", None,
+            row_count, inserted_count, skipped, import_status, None,
         ))
         conn.commit()
-        return row_count
+        return inserted_count
     except Exception as exc:
         if conn is not None:
             conn.rollback()
@@ -140,7 +148,7 @@ def insert_fba_inventory_snapshot_rows(
             try:
                 fail_conn.execute(INSERT_IMPORT_SQL, (
                     snapshot_id, source_file, region, marketplace_id, marketplace_code,
-                    row_count, 0, "FAILED", str(exc),
+                    row_count, 0, row_count, "FAILED", str(exc),
                 ))
                 fail_conn.commit()
             finally:
