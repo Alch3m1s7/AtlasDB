@@ -3,6 +3,7 @@ from db.db_connection import get_connection
 CREATE_FBA_INVENTORY_SNAPSHOTS_TABLE = """
 CREATE TABLE IF NOT EXISTS fba_inventory_snapshots (
     id BIGSERIAL PRIMARY KEY,
+    snapshot_id UUID,
 
     snapshot_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     region TEXT NOT NULL,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS fba_inventory_snapshots (
 CREATE_FBA_INVENTORY_IMPORTS_TABLE = """
 CREATE TABLE IF NOT EXISTS fba_inventory_imports (
     id                  BIGSERIAL PRIMARY KEY,
+    snapshot_id         UUID,
     source_file         TEXT NOT NULL UNIQUE,
     region              TEXT NOT NULL,
     marketplace_id      TEXT NOT NULL,
@@ -69,6 +71,22 @@ CREATE_FBA_INVENTORY_SNAPSHOTS_INDEXES = [
 ]
 
 
+def run_migrations() -> None:
+    """Idempotent: adds columns introduced after the initial schema creation."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            "ALTER TABLE fba_inventory_snapshots ADD COLUMN IF NOT EXISTS snapshot_id UUID;"
+        )
+        conn.execute(
+            "ALTER TABLE fba_inventory_imports ADD COLUMN IF NOT EXISTS snapshot_id UUID;"
+        )
+        conn.commit()
+        print("Migrations applied successfully")
+    finally:
+        conn.close()
+
+
 def create_tables() -> None:
     conn = get_connection()
     try:
@@ -82,3 +100,9 @@ def create_tables() -> None:
         print("Tables created successfully")
     finally:
         conn.close()
+
+
+if __name__ == "__main__":
+    create_tables()
+    run_migrations()
+    print("Schema up to date.")

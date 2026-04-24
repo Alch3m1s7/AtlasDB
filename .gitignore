@@ -17,13 +17,13 @@ build/
 venv/
 env/
 
-# Data
-data/*
-!data/.gitkeep
-!data/raw/
-!data/processed/
-!data/raw/.gitkeep
-!data/processed/.gitkeep
+# Data (subdirectories ignored; .gitkeep files already tracked and will remain so)
+data/raw/
+data/processed/
+data/logs/
+
+# Debug / scratch files
+src/*.txt
 
 # Logs
 *.log

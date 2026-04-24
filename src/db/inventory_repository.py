@@ -1,7 +1,10 @@
+import uuid
+
 from db.db_connection import get_connection
 
 INSERT_SNAPSHOT_SQL = """
 INSERT INTO fba_inventory_snapshots (
+    snapshot_id,
     region, marketplace_id, marketplace_code,
     sku, fnsku, asin, product_name, condition,
     your_price,
@@ -16,6 +19,7 @@ INSERT INTO fba_inventory_snapshots (
     afn_fulfillable_quantity_local, afn_fulfillable_quantity_remote,
     source_file
 ) VALUES (
+    %(snapshot_id)s,
     %(region)s, %(marketplace_id)s, %(marketplace_code)s,
     %(sku)s, %(fnsku)s, %(asin)s, %(product_name)s, %(condition)s,
     %(your_price)s,
@@ -34,9 +38,9 @@ INSERT INTO fba_inventory_snapshots (
 
 INSERT_IMPORT_SQL = """
 INSERT INTO fba_inventory_imports (
-    source_file, region, marketplace_id, marketplace_code,
+    snapshot_id, source_file, region, marketplace_id, marketplace_code,
     row_count, inserted_row_count, status, error_message
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -48,8 +52,16 @@ def _yes_no_to_bool(value) -> bool | None:
     return None
 
 
-def _to_params(row: dict, region: str, marketplace_id: str, marketplace_code: str, source_file: str) -> dict:
+def _to_params(
+    row: dict,
+    region: str,
+    marketplace_id: str,
+    marketplace_code: str,
+    source_file: str,
+    snapshot_id: str,
+) -> dict:
     return {
+        "snapshot_id": snapshot_id,
         "region": region,
         "marketplace_id": marketplace_id,
         "marketplace_code": marketplace_code,
@@ -103,7 +115,11 @@ def insert_fba_inventory_snapshot_rows(
         print("Source file already loaded, skipping insert")
         return 0
 
-    params_list = [_to_params(row, region, marketplace_id, marketplace_code, source_file) for row in rows]
+    snapshot_id = str(uuid.uuid4())
+    params_list = [
+        _to_params(row, region, marketplace_id, marketplace_code, source_file, snapshot_id)
+        for row in rows
+    ]
     row_count = len(params_list)
     conn = None
     try:
@@ -111,7 +127,7 @@ def insert_fba_inventory_snapshot_rows(
         with conn.cursor() as cur:
             cur.executemany(INSERT_SNAPSHOT_SQL, params_list)
         conn.execute(INSERT_IMPORT_SQL, (
-            source_file, region, marketplace_id, marketplace_code,
+            snapshot_id, source_file, region, marketplace_id, marketplace_code,
             row_count, row_count, "SUCCESS", None,
         ))
         conn.commit()
@@ -123,7 +139,7 @@ def insert_fba_inventory_snapshot_rows(
             fail_conn = get_connection()
             try:
                 fail_conn.execute(INSERT_IMPORT_SQL, (
-                    source_file, region, marketplace_id, marketplace_code,
+                    snapshot_id, source_file, region, marketplace_id, marketplace_code,
                     row_count, 0, "FAILED", str(exc),
                 ))
                 fail_conn.commit()

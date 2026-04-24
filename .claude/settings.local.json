@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(env|key|pem|secret|token\\)$\")",
+      "Bash(grep -iE \"\\\\.\\(env|key|pem|secret|token\\)$\")",
+      "Bash(echo \"exit:$?\")",
+      "Bash(echo \"tracked data count: $?\")",
+      "Bash(git rm *)"
+    ]
+  }
+}
