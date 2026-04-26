@@ -81,6 +81,35 @@ CREATE TABLE IF NOT EXISTS audit.ingestion_runs (
 );
 """
 
+CREATE_REFERENCE_SCHEMA = "CREATE SCHEMA IF NOT EXISTS reference;"
+
+CREATE_REFERENCE_MARKETPLACES_TABLE = """
+CREATE TABLE IF NOT EXISTS reference.marketplaces (
+    marketplace_id   TEXT PRIMARY KEY,
+    marketplace_code TEXT NOT NULL,
+    region           TEXT NOT NULL,
+    country_code     TEXT NOT NULL,
+    currency_code    TEXT NOT NULL,
+    marketplace_name TEXT NOT NULL,
+    is_active        BOOLEAN NOT NULL DEFAULT true,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+SEED_REFERENCE_MARKETPLACES = """
+INSERT INTO reference.marketplaces (
+    marketplace_id, marketplace_code, region, country_code, currency_code, marketplace_name, is_active
+) VALUES
+    ('A1F83G8C2ARO7P', 'UK', 'EU', 'GB', 'GBP', 'Amazon UK', true)
+ON CONFLICT (marketplace_id) DO UPDATE SET
+    marketplace_code = EXCLUDED.marketplace_code,
+    region           = EXCLUDED.region,
+    country_code     = EXCLUDED.country_code,
+    currency_code    = EXCLUDED.currency_code,
+    marketplace_name = EXCLUDED.marketplace_name,
+    is_active        = EXCLUDED.is_active;
+"""
+
 CREATE_FBA_INVENTORY_IMPORTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_fba_inventory_imports_marketplace_imported ON fba_inventory_imports (marketplace_id, imported_at);",
 ]
@@ -108,6 +137,9 @@ def run_migrations() -> None:
         )
         conn.execute(CREATE_AUDIT_SCHEMA)
         conn.execute(CREATE_AUDIT_INGESTION_RUNS_TABLE)
+        conn.execute(CREATE_REFERENCE_SCHEMA)
+        conn.execute(CREATE_REFERENCE_MARKETPLACES_TABLE)
+        conn.execute(SEED_REFERENCE_MARKETPLACES)
         conn.commit()
         print("Migrations applied successfully")
     finally:
@@ -125,6 +157,9 @@ def create_tables() -> None:
             conn.execute(stmt)
         conn.execute(CREATE_AUDIT_SCHEMA)
         conn.execute(CREATE_AUDIT_INGESTION_RUNS_TABLE)
+        conn.execute(CREATE_REFERENCE_SCHEMA)
+        conn.execute(CREATE_REFERENCE_MARKETPLACES_TABLE)
+        conn.execute(SEED_REFERENCE_MARKETPLACES)
         conn.commit()
         print("Tables created successfully")
     finally:
