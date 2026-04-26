@@ -110,10 +110,10 @@ def insert_fba_inventory_snapshot_rows(
     marketplace_id: str,
     marketplace_code: str,
     source_file: str,
-) -> int:
+) -> tuple[int, str | None]:
     if source_file_already_loaded(source_file):
         print("Source file already loaded, skipping insert")
-        return 0
+        return 0, None
 
     snapshot_id = str(uuid.uuid4())
     params_list = [
@@ -139,7 +139,7 @@ def insert_fba_inventory_snapshot_rows(
             row_count, inserted_count, skipped, import_status, None,
         ))
         conn.commit()
-        return inserted_count
+        return inserted_count, snapshot_id
     except Exception as exc:
         if conn is not None:
             conn.rollback()

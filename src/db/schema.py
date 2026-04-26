@@ -60,6 +60,27 @@ CREATE TABLE IF NOT EXISTS fba_inventory_imports (
 );
 """
 
+CREATE_AUDIT_SCHEMA = "CREATE SCHEMA IF NOT EXISTS audit;"
+
+CREATE_AUDIT_INGESTION_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS audit.ingestion_runs (
+    run_id          UUID PRIMARY KEY,
+    source          TEXT NOT NULL,
+    report_type     TEXT,
+    report_id       TEXT,
+    status          TEXT NOT NULL,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at     TIMESTAMPTZ,
+    source_file     TEXT,
+    expected_rows   INTEGER,
+    parsed_rows     INTEGER,
+    inserted_rows   INTEGER,
+    skipped_rows    INTEGER,
+    error_message   TEXT,
+    snapshot_id     UUID
+);
+"""
+
 CREATE_FBA_INVENTORY_IMPORTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_fba_inventory_imports_marketplace_imported ON fba_inventory_imports (marketplace_id, imported_at);",
 ]
@@ -85,6 +106,8 @@ def run_migrations() -> None:
         conn.execute(
             "ALTER TABLE fba_inventory_imports ADD COLUMN IF NOT EXISTS skipped_rows INTEGER NOT NULL DEFAULT 0;"
         )
+        conn.execute(CREATE_AUDIT_SCHEMA)
+        conn.execute(CREATE_AUDIT_INGESTION_RUNS_TABLE)
         conn.commit()
         print("Migrations applied successfully")
     finally:
@@ -100,6 +123,8 @@ def create_tables() -> None:
         conn.execute(CREATE_FBA_INVENTORY_IMPORTS_TABLE)
         for stmt in CREATE_FBA_INVENTORY_IMPORTS_INDEXES:
             conn.execute(stmt)
+        conn.execute(CREATE_AUDIT_SCHEMA)
+        conn.execute(CREATE_AUDIT_INGESTION_RUNS_TABLE)
         conn.commit()
         print("Tables created successfully")
     finally:

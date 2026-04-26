@@ -9,6 +9,7 @@ from reports.report_exports import export_rows_to_jsonl
 from logs.report_logger import log_report_created, log_status_checked, log_report_downloaded, log_fatal_status, log_ingest_result
 from db.inventory_repository import insert_fba_inventory_snapshot_rows
 from db.inventory_queries import print_inventory_summary
+from db.audit_runs import start_ingestion_run, finish_ingestion_run, fail_ingestion_run
 
 load_dotenv()
 
@@ -130,7 +131,7 @@ def main():
     elif args.command == "insert":
         rows = parse_fba_inventory_report(PARSE_FILE_PATH)
         valid_rows = [row for row in rows if row["_is_valid"]]
-        inserted = insert_fba_inventory_snapshot_rows(
+        inserted, _ = insert_fba_inventory_snapshot_rows(
             rows=valid_rows,
             region="EU",
             marketplace_id=EU_UK_MARKETPLACE_ID,
@@ -147,7 +148,7 @@ def main():
         valid_rows = [row for row in rows if row["_is_valid"]]
         expected = len(valid_rows)
         export_rows_to_jsonl(rows, EXPORT_OUTPUT_PATH)
-        inserted = insert_fba_inventory_snapshot_rows(
+        inserted, _ = insert_fba_inventory_snapshot_rows(
             rows=valid_rows,
             region="EU",
             marketplace_id=EU_UK_MARKETPLACE_ID,
@@ -178,6 +179,8 @@ def main():
 
         POLL_DELAYS = [30, 45, 60, 90, 120]  # seconds before each poll attempt
         now_utc = datetime.now(timezone.utc)
+
+        run_id = start_ingestion_run(source="ingest-spapi", report_type=REPORT_TYPE)
 
         # --- Step 1: Check for a recent DONE report before creating a new one ---
         document_id = None
@@ -257,17 +260,32 @@ def main():
                         else:
                             print("No reportDocumentId returned for FATAL/CANCELLED")
 
+                        fail_ingestion_run(
+                            run_id=run_id,
+                            error_message=f"Report {processing_status}: {report_id}",
+                            report_id=report_id,
+                        )
                         fatal = True
                         break
 
                 if not done:
                     if not fatal:
                         print("Report did not complete within polling window; try again later.")
+                        fail_ingestion_run(
+                            run_id=run_id,
+                            error_message="Polling window exceeded without DONE status",
+                            report_id=ingest_report_id,
+                        )
                     return
 
         # --- Step 3: Download / parse / export / insert / query ---
         if not document_id:
             print("No reportDocumentId available. Aborting.")
+            fail_ingestion_run(
+                run_id=run_id,
+                error_message="No reportDocumentId available after polling",
+                report_id=ingest_report_id,
+            )
             return
 
         timestamp = f"{datetime.now(ZoneInfo('Europe/London')):%Y%m%d_%H%M%S}"
@@ -291,7 +309,7 @@ def main():
         print(f"Exported: {jsonl_path}")
 
         expected = len(valid_rows)
-        inserted = insert_fba_inventory_snapshot_rows(
+        inserted, inserted_snapshot_id = insert_fba_inventory_snapshot_rows(
             rows=valid_rows,
             region="EU",
             marketplace_id=EU_UK_MARKETPLACE_ID,
@@ -307,6 +325,17 @@ def main():
             ingest_status = "PARTIAL"
         else:
             ingest_status = "FAILED"
+        finish_ingestion_run(
+            run_id=run_id,
+            status=ingest_status,
+            report_id=ingest_report_id,
+            source_file=raw_path,
+            parsed_rows=len(rows),
+            expected_rows=expected,
+            inserted_rows=inserted,
+            skipped_rows=expected - inserted,
+            snapshot_id=inserted_snapshot_id,
+        )
         log_ingest_result(
             source_file=raw_path,
             status=ingest_status,
