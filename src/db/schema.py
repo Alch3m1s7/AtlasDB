@@ -101,13 +101,34 @@ INSERT INTO reference.marketplaces (
     marketplace_id, marketplace_code, region, country_code, currency_code, marketplace_name, is_active
 ) VALUES
     ('A1F83G8C2ARO7P', 'UK', 'EU', 'GB', 'GBP', 'Amazon UK', true)
-ON CONFLICT (marketplace_id) DO UPDATE SET
-    marketplace_code = EXCLUDED.marketplace_code,
-    region           = EXCLUDED.region,
-    country_code     = EXCLUDED.country_code,
-    currency_code    = EXCLUDED.currency_code,
-    marketplace_name = EXCLUDED.marketplace_name,
-    is_active        = EXCLUDED.is_active;
+ON CONFLICT (marketplace_id) DO NOTHING;
+"""
+
+CREATE_REFERENCE_FX_RATES_TABLE = """
+CREATE TABLE IF NOT EXISTS reference.fx_rates (
+    base_currency   TEXT NOT NULL,
+    target_currency TEXT NOT NULL,
+    rate            NUMERIC(18, 8) NOT NULL,
+    rate_type       TEXT NOT NULL DEFAULT 'FIXED_BUSINESS_COMPARISON',
+    effective_from  DATE NOT NULL,
+    source_note     TEXT,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (base_currency, target_currency, effective_from),
+    CONSTRAINT chk_fx_rate_positive        CHECK (rate > 0),
+    CONSTRAINT chk_fx_no_self_conversion   CHECK (base_currency <> target_currency)
+);
+"""
+
+SEED_REFERENCE_FX_RATES = """
+INSERT INTO reference.fx_rates (
+    base_currency, target_currency, rate, rate_type, effective_from, source_note, is_active
+) VALUES
+    ('USD', 'GBP', 0.79000000, 'FIXED_BUSINESS_COMPARISON', '2026-04-26', 'Placeholder fixed business comparison rate - replace with user approved rate', true),
+    ('EUR', 'GBP', 0.86000000, 'FIXED_BUSINESS_COMPARISON', '2026-04-26', 'Placeholder fixed business comparison rate - replace with user approved rate', true),
+    ('CAD', 'GBP', 0.58000000, 'FIXED_BUSINESS_COMPARISON', '2026-04-26', 'Placeholder fixed business comparison rate - replace with user approved rate', true),
+    ('AUD', 'GBP', 0.51000000, 'FIXED_BUSINESS_COMPARISON', '2026-04-26', 'Placeholder fixed business comparison rate - replace with user approved rate', true)
+ON CONFLICT (base_currency, target_currency, effective_from) DO NOTHING;
 """
 
 CREATE_FBA_INVENTORY_IMPORTS_INDEXES = [
@@ -140,6 +161,8 @@ def run_migrations() -> None:
         conn.execute(CREATE_REFERENCE_SCHEMA)
         conn.execute(CREATE_REFERENCE_MARKETPLACES_TABLE)
         conn.execute(SEED_REFERENCE_MARKETPLACES)
+        conn.execute(CREATE_REFERENCE_FX_RATES_TABLE)
+        conn.execute(SEED_REFERENCE_FX_RATES)
         conn.commit()
         print("Migrations applied successfully")
     finally:
@@ -160,6 +183,8 @@ def create_tables() -> None:
         conn.execute(CREATE_REFERENCE_SCHEMA)
         conn.execute(CREATE_REFERENCE_MARKETPLACES_TABLE)
         conn.execute(SEED_REFERENCE_MARKETPLACES)
+        conn.execute(CREATE_REFERENCE_FX_RATES_TABLE)
+        conn.execute(SEED_REFERENCE_FX_RATES)
         conn.commit()
         print("Tables created successfully")
     finally:
