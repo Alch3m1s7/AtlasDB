@@ -49,9 +49,9 @@ PROBE_MARKETS = {
         "base_url": UK_BASE_URL,
         "token_env_vars": ["SPAPI_REFRESH_TOKEN_EU"],
         "asins": [
-            "B09DPSM7GM",  
+            "B09DPSM7GM",
             "B0FFSGMM2H",
-            "B01BTZTO24",  
+            "B01BTZTO24",
         ],
     },
     "AU": {
@@ -69,9 +69,9 @@ PROBE_MARKETS = {
         "base_url": CA_BASE_URL,
         "token_env_vars": ["SPAPI_REFRESH_TOKEN_NA"],
         "asins": [
-            "B09DPSM7GM",  
-            "B0FFSGMM2H", 
-            "B01BTZTO24", 
+            "B09DPSM7GM",
+            "B0FFSGMM2H",
+            "B01BTZTO24",
         ],
     },
 }

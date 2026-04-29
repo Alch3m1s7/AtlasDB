@@ -32,6 +32,25 @@ EXISTING_REPORT_DOCUMENT_ID = "amzn1.spdoc.1.4.eu.df8f719b-9c4a-4cdb-9ade-c35007
 EU_BASE_URL = "https://sellingpartnerapi-eu.amazon.com"
 
 
+def _load_probe_asins(path: str) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            asin = line.upper()
+            if asin in seen:
+                continue
+            seen.add(asin)
+            if len(asin) != 10:
+                print(f"[warn] Skipping invalid ASIN (not 10 chars): {asin!r}")
+                continue
+            result.append(asin)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
@@ -613,12 +632,9 @@ def main():
         AU_FALLBACK_PRICE = FALLBACK_PRICE_AUD
         AU_FALLBACK_CURRENCY = "AUD"
 
-        AU_PROBE_ASINS = [
-            "B0DGVWT3M5", "B08TRMF51Z", "B082T3KPJP", "B08TRJCS51", "B08TRJT6BT",
-            "B08TRJQBLF", "B01BTZTO24", "B0063G80FM", "B07CXQTC71", "B003K71VDK",
-            "B07BL5NKXT", "B013SJO2JE", "B006ZZ7GV0", "B00LSQX0S4", "B07FTYT8XT",
-            "B079G1HXGC", "B0BG91L162", "B08PG1C7LL", "B086DN2QQ6", "B08PG1FRBS",
-        ]
+        _PROBE_ASINS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "keepau_probe_asins.txt")
+        AU_PROBE_ASINS = _load_probe_asins(_PROBE_ASINS_PATH)
+        print(f"Loaded {len(AU_PROBE_ASINS)} ASINs from {os.path.abspath(_PROBE_ASINS_PATH)}")
 
         probe_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "marketplace_probe")
         os.makedirs(probe_dir, exist_ok=True)

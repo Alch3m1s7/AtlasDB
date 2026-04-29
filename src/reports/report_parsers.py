@@ -85,4 +85,3 @@ def parse_fba_inventory_report(file_path: str) -> list[dict]:
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         return [normalize_fba_inventory_row(row) for row in reader]
-
