@@ -8,7 +8,9 @@ from reports.report_parsers import parse_fba_inventory_report
 from reports.report_exports import export_rows_to_jsonl
 from logs.report_logger import log_report_created, log_status_checked, log_report_downloaded, log_fatal_status, log_ingest_result
 from db.inventory_repository import insert_fba_inventory_snapshot_rows
+from db.keepau_price_fee_repository import insert_keepau_price_fee_probe_rows
 from db.inventory_queries import print_inventory_summary
+from db.keepau_queries import print_keepau_latest
 from db.audit_runs import start_ingestion_run, finish_ingestion_run, fail_ingestion_run
 from catalog.catalog_items import (
     AU_BASE_URL, AU_MARKETPLACE_ID, PROBE_ASINS,
@@ -34,7 +36,7 @@ def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
         "command",
-        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access"],
+        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
         help="Command to run",
     )
     args = parser.parse_args()
@@ -601,48 +603,35 @@ def main():
     elif args.command == "probe-marketplace-pricing-fees":
         import json
         import time
+        import uuid
 
-        PRICING_INTERMARKET_DELAY_S = 37  # conservative; default competitiveSummary rate is ~0.5 rps burst
+        FEES_INTER_ASIN_DELAY_S = 2
 
-        PROBE_CONFIG = {
-            "AU": {
-                "marketplace_id": "A39IBJ37TRP1C6",
-                "base_url": "https://sellingpartnerapi-fe.amazon.com",
-                "token_env_vars": ["SPAPI_REFRESH_TOKEN_AU", "SPAPI_REFRESH_TOKEN_FE"],
-                "fallback_price": 69.69,
-                "fallback_currency": "AUD",
-            },
-            "UK": {
-                "marketplace_id": "A1F83G8C2ARO7P",
-                "base_url": "https://sellingpartnerapi-eu.amazon.com",
-                "token_env_vars": ["SPAPI_REFRESH_TOKEN_EU"],
-                "fallback_price": 69.69,
-                "fallback_currency": "GBP",
-            },
-            "CA": {
-                "marketplace_id": "A2EUQ1WTGCTBG2",
-                "base_url": "https://sellingpartnerapi-na.amazon.com",
-                "token_env_vars": ["SPAPI_REFRESH_TOKEN_NA"],
-                "fallback_price": 69.69,
-                "fallback_currency": "CAD",
-            },
-        }
+        AU_MARKETPLACE_ID_PROBE = "A39IBJ37TRP1C6"
+        AU_BASE_URL_PROBE = "https://sellingpartnerapi-fe.amazon.com"
+        AU_TOKEN_ENV_VARS = ["SPAPI_REFRESH_TOKEN_AU", "SPAPI_REFRESH_TOKEN_FE"]
+        AU_FALLBACK_PRICE = FALLBACK_PRICE_AUD
+        AU_FALLBACK_CURRENCY = "AUD"
+
+        AU_PROBE_ASINS = [
+            "B0DGVWT3M5", "B08TRMF51Z", "B082T3KPJP", "B08TRJCS51", "B08TRJT6BT",
+            "B08TRJQBLF", "B01BTZTO24", "B0063G80FM", "B07CXQTC71", "B003K71VDK",
+            "B07BL5NKXT", "B013SJO2JE", "B006ZZ7GV0", "B00LSQX0S4", "B07FTYT8XT",
+            "B079G1HXGC", "B0BG91L162", "B08PG1C7LL", "B086DN2QQ6", "B08PG1FRBS",
+        ]
 
         probe_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "marketplace_probe")
         os.makedirs(probe_dir, exist_ok=True)
-        timestamp = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
+        observed_at_utc = datetime.now(timezone.utc)
+        timestamp = f"{observed_at_utc:%Y%m%d_%H%M%S}"
+        run_id = str(uuid.uuid4())
 
-        print(f"=== Cross-market Pricing + Fees probe ===")
-
-        # 3-ASIN test set — expand to full PROBE_ASINS when validated
-        PROBE_ASINS_RUN = ["B003K71VDK", "B01BTZTO24", "B0063G80FM"]
-
-        # --- ASIN validation ---
+        # ASIN validation
         seen_asins: set[str] = set()
         duplicates_removed: list[str] = []
         invalid_asins: list[str] = []
         active_asins: list[str] = []
-        for _raw in PROBE_ASINS_RUN:
+        for _raw in AU_PROBE_ASINS:
             _a = _raw.strip().upper()
             if _a in seen_asins:
                 duplicates_removed.append(_a)
@@ -652,266 +641,357 @@ def main():
                 invalid_asins.append(_a)
             active_asins.append(_a)
 
+        print("=== AU 20-ASIN Pricing + Fees probe ===")
         print(f"ASIN validation:")
-        print(f"  Input              : {len(PROBE_ASINS_RUN)}")
+        print(f"  Input              : {len(AU_PROBE_ASINS)}")
         print(f"  After dedup        : {len(active_asins)}")
         print(f"  Duplicates removed : {duplicates_removed if duplicates_removed else 'none'}")
         print(f"  Invalid (!=10 chars): {invalid_asins if invalid_asins else 'none'}")
         print(f"  Active ASINs       : {active_asins}")
-        print(f"Markets   : {list(PROBE_CONFIG.keys())}")
+        print(f"Market    : AU  marketplace_id={AU_MARKETPLACE_ID_PROBE}")
         print(f"Output dir: {os.path.abspath(probe_dir)}")
         print(f"Timestamp : {timestamp}Z")
+        print(f"Fees delay: {FEES_INTER_ASIN_DELAY_S}s between ASINs")
         print()
 
-        def _log_call(market: str, endpoint: str, t_req, t_resp, result: dict) -> None:
+        # Token
+        au_refresh_token_probe = next(
+            (os.getenv(v) for v in AU_TOKEN_ENV_VARS if os.getenv(v)), None
+        )
+        au_token_source_probe = next(
+            (v for v in AU_TOKEN_ENV_VARS if os.getenv(v)), None
+        )
+        if not au_refresh_token_probe:
+            raise RuntimeError(f"Set {AU_TOKEN_ENV_VARS[0]} or {AU_TOKEN_ENV_VARS[1]} in .env")
+        au_token_probe = get_access_token(au_refresh_token_probe)
+        print(f"Token     : {au_token_source_probe}  OK")
+        print()
+
+        def _log_step(label: str, t_req, t_resp, result: dict) -> None:
             meta = result.get("_meta") or {}
             status = meta.get("status") or result.get("_status", "?")
             rid = meta.get("request_id") or result.get("_request_id", "n/a")
             rl = meta.get("rate_limit") or "n/a"
             latency = f"{(t_resp - t_req).total_seconds():.2f}s"
-            print(f"  [{market}] {endpoint}")
+            print(f"  {label}")
             print(f"    req_utc : {t_req.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]}Z")
             print(f"    resp_utc: {t_resp.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]}Z  latency={latency}")
             print(f"    HTTP={status}  RequestId={rid}  RateLimit={rl}")
             if result.get("_retry_after"):
                 print(f"    Retry-After: {result['_retry_after']}")
-            if "_error" in result and result["_error"] != "THROTTLED":
-                body_snippet = result.get("_body") or result.get("_detail") or ""
-                print(f"    error: {body_snippet[:200]}")
+            if "_error" in result and result.get("_error") != "THROTTLED":
+                snippet = result.get("_body") or result.get("_detail") or ""
+                print(f"    error: {snippet[:200]}")
 
-        all_rows: list[dict] = []  # collected for comparison table
-        pricing_status_by_market: dict[str, str] = {}
+        def _extract_featured_full(asin_pricing: dict) -> dict:
+            """Return all featured offer fields including sellerId."""
+            for opt in asin_pricing.get("featuredBuyingOptions") or []:
+                for seg in opt.get("segmentedFeaturedOffers") or []:
+                    listing = seg.get("listingPrice") or {}
+                    amount = listing.get("amount")
+                    if amount is not None:
+                        return {
+                            "price": float(amount),
+                            "currency": listing.get("currencyCode"),
+                            "fulfillment_type": seg.get("fulfillmentType"),
+                            "condition": seg.get("condition"),
+                            "seller_id": seg.get("sellerId"),
+                        }
+            return {}
 
-        for market_idx, (market_code, cfg) in enumerate(PROBE_CONFIG.items()):
-            marketplace_id = cfg["marketplace_id"]
-            base_url = cfg["base_url"]
-            fallback_price = cfg["fallback_price"]
-            fallback_currency = cfg["fallback_currency"]
+        def _extract_lowest_offer(asin_pricing: dict) -> dict:
+            """Return the offer with the lowest listingPrice across all lowestPricedOffers groups."""
+            best_amount = float("inf")
+            best: dict = {}
+            for group in asin_pricing.get("lowestPricedOffers") or []:
+                for offer in group.get("offers") or []:
+                    listing = offer.get("listingPrice") or {}
+                    amount = listing.get("amount")
+                    if amount is not None and amount < best_amount:
+                        best_amount = amount
+                        best = {
+                            "price": float(amount),
+                            "currency": listing.get("currencyCode"),
+                            "seller_id": offer.get("sellerId"),
+                        }
+            return best
 
-            print(f"{'=' * 55}")
-            print(f"MARKET: {market_code}  marketplace_id={marketplace_id}")
-            print(f"{'=' * 55}")
-
-            # --- Token ---
-            refresh_token = next(
-                (os.getenv(v) for v in cfg["token_env_vars"] if os.getenv(v)), None
+        def _extract_weight(cat_item: dict, mkt_id: str) -> dict:
+            """Extract weight from catalog dimensions (package first, then item)."""
+            dims_list = cat_item.get("dimensions") or []
+            dims = next(
+                (d for d in dims_list if d.get("marketplaceId") == mkt_id),
+                dims_list[0] if dims_list else None,
             )
-            token_source = next(
-                (v for v in cfg["token_env_vars"] if os.getenv(v)), None
-            )
-            if not refresh_token:
-                print(f"  SKIP: none of {cfg['token_env_vars']} set in .env")
-                print()
-                continue
-            try:
-                market_token = get_access_token(refresh_token)
-                print(f"  Token: {token_source}  OK")
-            except Exception as exc:
-                print(f"  Token: FAILED — {exc}")
-                print()
-                continue
+            if not dims:
+                return {}
+            for section in ("package", "item"):
+                w = (dims.get(section) or {}).get("weight") or {}
+                val = w.get("value")
+                if val is not None:
+                    unit = w.get("unit", "")
+                    ul = unit.lower()
+                    if "kilogram" in ul or ul == "kg":
+                        grams = round(val * 1000, 1)
+                    elif ul in ("gram", "grams", "g"):
+                        grams = round(float(val), 1)
+                    elif "pound" in ul or ul in ("lb", "lbs"):
+                        grams = round(val * 453.592, 1)
+                    elif "ounce" in ul or ul == "oz":
+                        grams = round(val * 28.3495, 1)
+                    else:
+                        grams = None
+                    return {"value": val, "unit": unit, "grams": grams, "section": section}
+            return {}
 
-            # --- Step 1: Catalog ---
+        # --- Step 1: Catalog (summaries + dimensions) — batched, max 10 per call ---
+        CATALOG_BATCH_SIZE = 10
+        print(f"--- Step 1: Catalog (summaries + dimensions, {CATALOG_BATCH_SIZE}/batch) ---")
+        catalog_by_asin: dict[str, dict] = {}
+        catalog_rid = "?"
+        _catalog_batches = [
+            active_asins[i:i + CATALOG_BATCH_SIZE]
+            for i in range(0, len(active_asins), CATALOG_BATCH_SIZE)
+        ]
+        _catalog_raw_batches: list[dict] = []
+        for _bidx, _batch in enumerate(_catalog_batches):
             t_req = datetime.now(timezone.utc)
-            catalog_data = search_catalog_items(
-                base_url=base_url,
-                access_token=market_token,
-                asins=active_asins,
-                marketplace_id=marketplace_id,
-                included_data=["summaries"],
+            _batch_data = search_catalog_items(
+                base_url=AU_BASE_URL_PROBE,
+                access_token=au_token_probe,
+                asins=_batch,
+                marketplace_id=AU_MARKETPLACE_ID_PROBE,
+                included_data=["summaries", "dimensions"],
             )
             t_resp = datetime.now(timezone.utc)
-            _log_call(market_code, "catalog/search (GET)", t_req, t_resp, catalog_data)
-            catalog_path = os.path.join(probe_dir, f"{market_code}_catalog_{timestamp}.json")
-            with open(catalog_path, "w", encoding="utf-8") as f:
-                json.dump(catalog_data, f, indent=2)
-            print(f"    saved: {catalog_path}")
-
-            catalog_by_asin: dict[str, dict] = {}
-            if "_error" not in catalog_data:
-                for item in catalog_data.get("items") or []:
-                    k = item.get("asin")
-                    if k:
-                        catalog_by_asin[k] = item
-            print()
-
-            # --- Step 2: Competitive pricing (rate-limit guard between markets) ---
-            if market_idx > 0:
-                print(f"  [rate limit] Waiting {PRICING_INTERMARKET_DELAY_S}s before pricing call ({market_code})...")
-                time.sleep(PRICING_INTERMARKET_DELAY_S)
-
-            t_req = datetime.now(timezone.utc)
-            pricing_data = get_competitive_summary_batch(
-                base_url=base_url,
-                access_token=market_token,
-                asins=active_asins,
-                marketplace_id=marketplace_id,
+            _log_step(
+                f"catalog/search batch {_bidx + 1}/{len(_catalog_batches)} ({len(_batch)} ASINs)",
+                t_req, t_resp, _batch_data,
             )
-            t_resp = datetime.now(timezone.utc)
-            _log_call(market_code, "pricing/competitiveSummary (POST batch)", t_req, t_resp, pricing_data)
-            pricing_path = os.path.join(probe_dir, f"{market_code}_pricing_{timestamp}.json")
-            with open(pricing_path, "w", encoding="utf-8") as f:
-                json.dump(pricing_data, f, indent=2)
-            print(f"    saved: {pricing_path}")
-
-            pricing_by_asin = extract_pricing_by_asin(pricing_data)
-            pricing_status_by_market[market_code] = str(
-                (pricing_data.get("_meta") or {}).get("status") or pricing_data.get("_status", "?")
-            )
-            print()
-
-            # --- Step 3: Fees per ASIN ---
-            fees_by_asin: dict[str, dict] = {}
-            for asin_idx, asin in enumerate(active_asins):
-                if asin_idx > 0:
-                    time.sleep(1)
-                featured_price, featured_currency, feat_fulfillment, feat_condition = (
-                    extract_featured_offer_price(pricing_by_asin.get(asin, {}))
-                )
-                if featured_price is not None:
-                    listing_price = featured_price
-                    fee_currency = featured_currency or fallback_currency
-                    price_label = (
-                        f"REAL  {listing_price} {fee_currency}"
-                        f"  fulfillment={feat_fulfillment}  condition={feat_condition}"
-                    )
-                else:
-                    listing_price = fallback_price
-                    fee_currency = fallback_currency
-                    price_label = f"FALLBACK  {fallback_price} {fallback_currency}  (no featured offer)"
-
-                t_req = datetime.now(timezone.utc)
-                fee_resp = get_fees_estimate(
-                    base_url=base_url,
-                    access_token=market_token,
-                    asin=asin,
-                    marketplace_id=marketplace_id,
-                    listing_price=listing_price,
-                    currency_code=fee_currency,
-                )
-                t_resp = datetime.now(timezone.utc)
-                fees_by_asin[asin] = fee_resp
-                _log_call(market_code, f"fees/estimate {asin} @ {listing_price} {fee_currency} {price_label}",
-                          t_req, t_resp, fee_resp)
-
-            fees_path = os.path.join(probe_dir, f"{market_code}_fees_{timestamp}.json")
-            with open(fees_path, "w", encoding="utf-8") as f:
-                json.dump(fees_by_asin, f, indent=2)
-            print(f"    saved: {fees_path}")
-            print()
-
-            # --- Collect rows for comparison table ---
-            catalog_meta = (catalog_data.get("_meta") or {})
-            pricing_meta = (pricing_data.get("_meta") or {})
-
-            for asin in active_asins:
-                cat_item = catalog_by_asin.get(asin, {})
-                summaries = cat_item.get("summaries") or []
-                summary = next(
-                    (s for s in summaries if s.get("marketplaceId") == marketplace_id),
-                    summaries[0] if summaries else {},
-                )
-                classification = (summary.get("browseClassification") or {}).get("displayName", "")
-
-                feat_price, feat_curr, _, _ = extract_featured_offer_price(pricing_by_asin.get(asin, {}))
-                fee_data = extract_fee_amounts(fees_by_asin.get(asin, {}))
-
-                ref_pct = None
-                lp_for_pct = feat_price
-                if lp_for_pct is None:
-                    lp_for_pct = fallback_price
-                if fee_data["referral_fee"] is not None and lp_for_pct:
-                    ref_pct = (fee_data["referral_fee"] / lp_for_pct) * 100
-
-                pricing_http = (pricing_data.get("_meta") or {}).get("status") or pricing_data.get("_status", "?")
-                fees_http = (fees_by_asin.get(asin, {}).get("_meta") or {}).get("status") or \
-                            fees_by_asin.get(asin, {}).get("_status", "?")
-
-                all_rows.append({
-                    "market": market_code,
-                    "asin": asin,
-                    "title": summary.get("itemName", "")[:35],
-                    "brand": summary.get("brand", "")[:15],
-                    "classification": classification[:18],
-                    "pricing_http": pricing_http,
-                    "featured_price": f"{feat_price} {feat_curr}" if feat_price else "-",
-                    "fees_http": fees_http,
-                    "referral_fee": fee_data["referral_fee"],
-                    "referral_pct": f"{ref_pct:.1f}%" if ref_pct is not None else "-",
-                    "fba_fee": fee_data["fba_fee"],
-                    "currency": fee_data["currency"] or fallback_currency,
-                    "catalog_rid": catalog_meta.get("request_id", "?")[-8:] if catalog_meta.get("request_id") else "?",
-                    "pricing_rid": pricing_meta.get("request_id", "?")[-8:] if pricing_meta.get("request_id") else "?",
-                    "fees_rid": ((fees_by_asin.get(asin, {}).get("_meta") or {}).get("request_id") or "?")[-8:],
-                })
-
-        # --- Final comparison table ---
+            _catalog_raw_batches.append(_batch_data)
+            if "_error" not in _batch_data:
+                if catalog_rid == "?":
+                    catalog_rid = (_batch_data.get("_meta") or {}).get("request_id") or "?"
+                for _item in _batch_data.get("items") or []:
+                    _k = _item.get("asin")
+                    if _k:
+                        catalog_by_asin[_k] = _item
+        catalog_path = os.path.join(probe_dir, f"AU_catalog_{timestamp}.json")
+        with open(catalog_path, "w", encoding="utf-8") as f:
+            json.dump({"batches": _catalog_raw_batches}, f, indent=2)
+        print(f"    saved: {catalog_path}")
+        print(f"    catalog items found: {len(catalog_by_asin)}/{len(active_asins)}")
         print()
-        print("=" * 120)
-        print("CROSS-MARKET COMPARISON TABLE")
-        print("=" * 120)
-        hdr = (f"{'MKT':<4} {'ASIN':<12} {'TITLE':<36} {'BRAND':<16} {'CATEGORY':<19} "
-               f"{'P-HTTP':<7} {'FEAT.PRICE':<14} {'F-HTTP':<7} "
-               f"{'REF.FEE':<9} {'REF%':<8} {'FBA.FEE':<9} {'CURR':<5} "
-               f"{'CAT-RID':<9} {'PRC-RID':<9} {'FEE-RID':<9}")
-        print(hdr)
-        print("-" * 120)
-        for row in all_rows:
-            ref_fee_str = f"{row['referral_fee']:.2f}" if row['referral_fee'] is not None else "-"
-            fba_fee_str = f"{row['fba_fee']:.2f}" if row['fba_fee'] is not None else "-"
-            print(
-                f"{row['market']:<4} {row['asin']:<12} {row['title']:<36} {row['brand']:<16} "
-                f"{row['classification']:<19} {str(row['pricing_http']):<7} {row['featured_price']:<14} "
-                f"{str(row['fees_http']):<7} {ref_fee_str:<9} {row['referral_pct']:<8} "
-                f"{fba_fee_str:<9} {row['currency']:<5} "
-                f"{row['catalog_rid']:<9} {row['pricing_rid']:<9} {row['fees_rid']:<9}"
+
+        # --- Step 2: Competitive pricing batch (FORMAT_B) ---
+        print("--- Step 2: Competitive pricing batch ---")
+        t_req = datetime.now(timezone.utc)
+        pricing_data = get_competitive_summary_batch(
+            base_url=AU_BASE_URL_PROBE,
+            access_token=au_token_probe,
+            asins=active_asins,
+            marketplace_id=AU_MARKETPLACE_ID_PROBE,
+        )
+        t_resp = datetime.now(timezone.utc)
+        _log_step("pricing/competitiveSummary (POST batch)", t_req, t_resp, pricing_data)
+        pricing_path = os.path.join(probe_dir, f"AU_pricing_{timestamp}.json")
+        with open(pricing_path, "w", encoding="utf-8") as f:
+            json.dump(pricing_data, f, indent=2)
+        print(f"    saved: {pricing_path}")
+        pricing_rid = (pricing_data.get("_meta") or {}).get("request_id") or "?"
+        pricing_http = (pricing_data.get("_meta") or {}).get("status") or pricing_data.get("_status", "?")
+        pricing_by_asin = extract_pricing_by_asin(pricing_data)
+        print()
+
+        # --- Step 3: Fees per ASIN (2s between calls) ---
+        print("--- Step 3: Fees estimates ---")
+        fees_by_asin: dict[str, dict] = {}
+        prices_used: dict[str, tuple] = {}
+        for _asin_idx, _asin in enumerate(active_asins):
+            if _asin_idx > 0:
+                time.sleep(FEES_INTER_ASIN_DELAY_S)
+            _feat = _extract_featured_full(pricing_by_asin.get(_asin, {}))
+            if _feat:
+                _listing_price = _feat["price"]
+                _fee_currency = _feat["currency"] or AU_FALLBACK_CURRENCY
+                _price_src = "REAL"
+            else:
+                _listing_price = AU_FALLBACK_PRICE
+                _fee_currency = AU_FALLBACK_CURRENCY
+                _price_src = "FALLBACK"
+            prices_used[_asin] = (_listing_price, _fee_currency, _price_src)
+            t_req = datetime.now(timezone.utc)
+            _fee_resp = get_fees_estimate(
+                base_url=AU_BASE_URL_PROBE,
+                access_token=au_token_probe,
+                asin=_asin,
+                marketplace_id=AU_MARKETPLACE_ID_PROBE,
+                listing_price=_listing_price,
+                currency_code=_fee_currency,
             )
+            t_resp = datetime.now(timezone.utc)
+            fees_by_asin[_asin] = _fee_resp
+            _log_step(
+                f"fees/estimate {_asin} @ {_listing_price} {_fee_currency} [{_price_src}]",
+                t_req, t_resp, _fee_resp,
+            )
+        fees_path = os.path.join(probe_dir, f"AU_fees_{timestamp}.json")
+        with open(fees_path, "w", encoding="utf-8") as f:
+            json.dump(fees_by_asin, f, indent=2)
+        print(f"    saved: {fees_path}")
+        print()
+
+        # --- Collect rows ---
+        all_rows: list[dict] = []
+        for asin in active_asins:
+            cat_item = catalog_by_asin.get(asin, {})
+            summaries = cat_item.get("summaries") or []
+            summary = next(
+                (s for s in summaries if s.get("marketplaceId") == AU_MARKETPLACE_ID_PROBE),
+                summaries[0] if summaries else {},
+            )
+            feat = _extract_featured_full(pricing_by_asin.get(asin, {}))
+            lowest = _extract_lowest_offer(pricing_by_asin.get(asin, {}))
+            weight = _extract_weight(cat_item, AU_MARKETPLACE_ID_PROBE)
+            fee_data = extract_fee_amounts(fees_by_asin.get(asin, {}))
+            listing_price, fee_currency, price_src = prices_used.get(
+                asin, (AU_FALLBACK_PRICE, AU_FALLBACK_CURRENCY, "FALLBACK")
+            )
+            ref_pct = None
+            if fee_data["referral_fee"] is not None and listing_price and listing_price > 0:
+                ref_pct = (fee_data["referral_fee"] / listing_price) * 100
+            fees_rid = ((fees_by_asin.get(asin, {}).get("_meta") or {}).get("request_id") or "?")
+            all_rows.append({
+                "asin": asin,
+                "title": summary.get("itemName", ""),
+                "brand": summary.get("brand", ""),
+                "feat_price": feat.get("price"),
+                "feat_currency": feat.get("currency"),
+                "feat_seller": feat.get("seller_id"),
+                "currency": feat.get("currency") or fee_currency,
+                "fulfillment": feat.get("fulfillment_type"),
+                "condition": feat.get("condition"),
+                "low_price": lowest.get("price"),
+                "low_currency": lowest.get("currency"),
+                "low_seller": lowest.get("seller_id"),
+                "referral_fee": fee_data["referral_fee"],
+                "referral_pct": ref_pct,
+                "fba_fee": fee_data["fba_fee"],
+                "weight_val": weight.get("value"),
+                "weight_unit": weight.get("unit"),
+                "weight_grams": weight.get("grams"),
+                "price_src": price_src,
+                "catalog_rid": catalog_rid[-8:] if catalog_rid != "?" else "?",
+                "pricing_rid": pricing_rid[-8:] if pricing_rid != "?" else "?",
+                "fees_rid": fees_rid[-8:] if fees_rid != "?" else "?",
+                "catalog_rid_full": catalog_rid if catalog_rid != "?" else None,
+                "pricing_rid_full": pricing_rid if pricing_rid != "?" else None,
+                "fees_rid_full": fees_rid if fees_rid != "?" else None,
+            })
+
+        # --- Compact two-line-per-ASIN table ---
+        def _p(v, fmt=".2f", fallback="not returned"):
+            return format(v, fmt) if v is not None else fallback
+
+        def _s(v, width=0, fallback="not returned"):
+            out = str(v) if v is not None else fallback
+            return out[:width] if width else out
+
+        def _pct(v):
+            return f"{v:.1f}%" if v is not None else "-"
+
+        print()
+        print("=" * 110)
+        print("AU 20-ASIN PRICING + FEES — compact table (2 lines per ASIN)")
+        print("=" * 110)
+        h1 = (f"{'ASIN':<12} {'TITLE':<30} {'BRAND':<13} {'FEAT.PRICE':>10} "
+              f"{'FEAT.SELLER':<14} {'CURR':<5} {'FUL':<4} {'CND':<4} {'SRC':<8}")
+        h2 = (f"{'':12} {'LOW.PRICE':>10} {'LOW.SELLER':<14} {'REF.FEE':>8} {'REF%':>6} "
+              f"{'FBA':>8} {'C-RID':<10} {'P-RID':<10} {'F-RID':<10}")
+        print(h1)
+        print(h2)
+        print("-" * 110)
+        for row in all_rows:
+            feat_price_s = _p(row["feat_price"])
+            feat_seller_s = _s(row["feat_seller"], 14)
+            low_price_s = _p(row["low_price"])
+            low_seller_s = _s(row["low_seller"], 14)
+            ref_fee_s = _p(row["referral_fee"])
+            fba_s = _p(row["fba_fee"])
+            print(
+                f"{row['asin']:<12} {row['title'][:30]:<30} {row['brand'][:13]:<13} {feat_price_s:>10} "
+                f"{feat_seller_s:<14} {row['currency']:<5} "
+                f"{_s(row['fulfillment'],4):<4} {_s(row['condition'],4):<4} {row['price_src']:<8}"
+            )
+            print(
+                f"{'':12} {low_price_s:>10} {low_seller_s:<14} {ref_fee_s:>8} {_pct(row['referral_pct']):>6} "
+                f"{fba_s:>8} {row['catalog_rid']:<10} {row['pricing_rid']:<10} {row['fees_rid']:<10}"
+            )
+        print("=" * 110)
 
         # --- End-of-probe summary ---
-        from collections import defaultdict
-        tested_markets = list(dict.fromkeys(r["market"] for r in all_rows))
-        total_combos = len(all_rows)
-        catalog_success = sum(1 for r in all_rows if r["title"])
-        fees_ok = sum(1 for r in all_rows if r["fees_http"] == 200)
-        asins_missing_fba = sorted({r["asin"] for r in all_rows if r["fba_fee"] is None})
-        asins_missing_ref = sorted({r["asin"] for r in all_rows if r["referral_fee"] is None})
-
-        ref_pcts_by_market: dict = defaultdict(set)
-        fba_fees_by_market: dict = defaultdict(set)
-        for r in all_rows:
-            if r["referral_pct"] != "-":
-                ref_pcts_by_market[r["market"]].add(r["referral_pct"])
-            if r["fba_fee"] is not None:
-                fba_fees_by_market[r["market"]].add(round(r["fba_fee"], 2))
+        n = len(active_asins)
+        real_count = sum(1 for r in all_rows if r["feat_price"] is not None)
+        feat_seller_count = sum(1 for r in all_rows if r["feat_seller"] is not None)
+        low_seller_count = sum(1 for r in all_rows if r["low_seller"] is not None)
+        fees_ok = sum(
+            1 for a in active_asins
+            if (fees_by_asin.get(a, {}).get("_meta") or {}).get("status") == 200
+        )
+        ref_pct_count = sum(1 for r in all_rows if r["referral_pct"] is not None)
+        fba_count = sum(1 for r in all_rows if r["fba_fee"] is not None)
 
         print()
-        print("=" * 80)
+        print("=" * 70)
         print("END-OF-PROBE SUMMARY")
-        print("=" * 80)
-        print(f"Markets run                   : {tested_markets}")
-        print(f"ASINs per market              : {len(active_asins)}")
-        print(f"Total ASIN-market combos      : {total_combos}")
-        print(f"Catalog found                 : {catalog_success}/{total_combos}")
-        print(f"Fees success (HTTP 200)        : {fees_ok}/{total_combos}  fail={total_combos - fees_ok}")
+        print("=" * 70)
+        print(f"Pricing HTTP                  : {pricing_http}")
+        print(f"ASINs tested                  : {n}")
+        print(f"Real featured prices found    : {real_count}/{n}")
+        print(f"Featured sellerIds returned   : {feat_seller_count}/{n}")
+        print(f"Lowest offer sellerIds        : {low_seller_count}/{n}")
+        print(f"Fees success (HTTP 200)       : {fees_ok}/{n}")
+        print(f"Referral rate calculated      : {ref_pct_count}/{n}")
+        print(f"FBA fee returned              : {fba_count}/{n}")
         print()
-        print("Pricing HTTP status by market:")
-        for mkt, status in pricing_status_by_market.items():
-            print(f"  {mkt}: HTTP {status}")
+        print("Missing fields by ASIN:")
+        _any_missing = False
+        for row in all_rows:
+            _missing = []
+            if row["feat_price"] is None:
+                _missing.append("featured_price")
+            if row["feat_seller"] is None:
+                _missing.append("feat_seller_id")
+            if row["low_price"] is None:
+                _missing.append("lowest_price")
+            if row["low_seller"] is None:
+                _missing.append("low_seller_id")
+            if row["referral_fee"] is None:
+                _missing.append("referral_fee")
+            if row["referral_pct"] is None:
+                _missing.append("ref_pct")
+            if row["fba_fee"] is None:
+                _missing.append("fba_fee")
+            if _missing:
+                _any_missing = True
+                print(f"  {row['asin']}: {', '.join(_missing)}")
+        if not _any_missing:
+            print("  (none — all fields present for all ASINs)")
         print()
-        print(f"ASINs with missing FBA fee     ({len(asins_missing_fba)}): "
-              f"{asins_missing_fba if asins_missing_fba else 'none'}")
-        print(f"ASINs with missing referral fee ({len(asins_missing_ref)}): "
-              f"{asins_missing_ref if asins_missing_ref else 'none'}")
+        print(f"Raw files saved to: {os.path.abspath(probe_dir)}")
+        print(f"  {catalog_path}")
+        print(f"  {pricing_path}")
+        print(f"  {fees_path}")
+
+        inserted = insert_keepau_price_fee_probe_rows(
+            rows=all_rows,
+            raw_paths={"catalog": catalog_path, "pricing": pricing_path, "fees": fees_path},
+            run_id=run_id,
+            observed_at=observed_at_utc,
+            marketplace_id=AU_MARKETPLACE_ID_PROBE,
+        )
         print()
-        print("Distinct referral fee % by market (derived estimate — not official schedule):")
-        for mkt in tested_markets:
-            pcts = sorted(ref_pcts_by_market.get(mkt, set()))
-            print(f"  {mkt}: {pcts if pcts else 'no data'}")
-        print()
-        print("Distinct FBA fee values by market:")
-        for mkt in tested_markets:
-            fees_set = sorted(fba_fees_by_market.get(mkt, set()))
-            print(f"  {mkt}: {fees_set if fees_set else 'no data'}")
+        print(f"DB insert: {inserted} rows -> staging.keepau_price_fee_probe  run_id={run_id}")
 
     elif args.command == "probe-pricing-access":
         import json
@@ -1257,6 +1337,9 @@ def main():
         print()
         print(f"Files saved: {len(result_rows) * 2} ({len(result_rows)} JSON + {len(result_rows)} TXT)")
         print(f"Directory  : {os.path.abspath(probe_dir)}")
+
+    elif args.command == "keepau-latest":
+        print_keepau_latest()
 
 
 if __name__ == "__main__":

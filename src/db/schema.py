@@ -142,6 +142,46 @@ CREATE_FBA_INVENTORY_SNAPSHOTS_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_fba_inventory_snapshots_marketplace_snapshot ON fba_inventory_snapshots (marketplace_id, snapshot_at);",
 ]
 
+CREATE_STAGING_SCHEMA = "CREATE SCHEMA IF NOT EXISTS staging;"
+
+CREATE_KEEPAU_PRICE_FEE_PROBE_TABLE = """
+CREATE TABLE IF NOT EXISTS staging.keepau_price_fee_probe (
+    id                        BIGSERIAL PRIMARY KEY,
+    run_id                    UUID NOT NULL,
+    observed_at               TIMESTAMPTZ NOT NULL,
+    marketplace_id            TEXT NOT NULL,
+    asin                      TEXT NOT NULL,
+    title                     TEXT,
+    brand                     TEXT,
+    featured_price            NUMERIC(12, 4),
+    featured_currency         TEXT,
+    featured_seller_id        TEXT,
+    featured_fulfillment_type TEXT,
+    featured_condition        TEXT,
+    lowest_price              NUMERIC(12, 4),
+    lowest_currency           TEXT,
+    lowest_seller_id          TEXT,
+    referral_fee              NUMERIC(12, 4),
+    referral_fee_rate_pct     NUMERIC(8, 4),
+    fba_fee                   NUMERIC(12, 4),
+    price_source              TEXT,
+    catalog_request_id        TEXT,
+    pricing_request_id        TEXT,
+    fees_request_id           TEXT,
+    raw_catalog_path          TEXT,
+    raw_pricing_path          TEXT,
+    raw_fees_path             TEXT,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+CREATE_KEEPAU_PRICE_FEE_PROBE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_keepau_probe_asin ON staging.keepau_price_fee_probe (asin);",
+    "CREATE INDEX IF NOT EXISTS idx_keepau_probe_observed_at ON staging.keepau_price_fee_probe (observed_at);",
+    "CREATE INDEX IF NOT EXISTS idx_keepau_probe_featured_seller ON staging.keepau_price_fee_probe (featured_seller_id);",
+    "CREATE INDEX IF NOT EXISTS idx_keepau_probe_marketplace_asin_observed ON staging.keepau_price_fee_probe (marketplace_id, asin, observed_at);",
+]
+
 
 def run_migrations() -> None:
     """Idempotent: adds columns introduced after the initial schema creation."""
@@ -163,6 +203,10 @@ def run_migrations() -> None:
         conn.execute(SEED_REFERENCE_MARKETPLACES)
         conn.execute(CREATE_REFERENCE_FX_RATES_TABLE)
         conn.execute(SEED_REFERENCE_FX_RATES)
+        conn.execute(CREATE_STAGING_SCHEMA)
+        conn.execute(CREATE_KEEPAU_PRICE_FEE_PROBE_TABLE)
+        for stmt in CREATE_KEEPAU_PRICE_FEE_PROBE_INDEXES:
+            conn.execute(stmt)
         conn.commit()
         print("Migrations applied successfully")
     finally:
@@ -185,6 +229,10 @@ def create_tables() -> None:
         conn.execute(SEED_REFERENCE_MARKETPLACES)
         conn.execute(CREATE_REFERENCE_FX_RATES_TABLE)
         conn.execute(SEED_REFERENCE_FX_RATES)
+        conn.execute(CREATE_STAGING_SCHEMA)
+        conn.execute(CREATE_KEEPAU_PRICE_FEE_PROBE_TABLE)
+        for stmt in CREATE_KEEPAU_PRICE_FEE_PROBE_INDEXES:
+            conn.execute(stmt)
         conn.commit()
         print("Tables created successfully")
     finally:
