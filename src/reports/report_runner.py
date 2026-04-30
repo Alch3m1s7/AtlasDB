@@ -140,6 +140,13 @@ def run_report(marketplace_code: str, report_key: str) -> dict:
             err_msg = f"Polling window exceeded without DONE status: reportId={report_id}"
             return _fail(run_id, report_id, err_msg, marketplace_code, report_key, report_type, None, None, "FAILED_TIMEOUT")
 
+    source_label = "REUSED" if reused else "FRESH"
+    print(
+        f"[{marketplace_code}/{report_key}]  {source_label}"
+        f"  marketplace_id={marketplace_id}  report_type={report_type}"
+        f"  report_id={report_id}"
+    )
+
     if not document_id:
         err_msg = f"No reportDocumentId: reportId={report_id}"
         return _fail(run_id, report_id, err_msg, marketplace_code, report_key, report_type, None, None, "FAILED_NO_DOCUMENT")

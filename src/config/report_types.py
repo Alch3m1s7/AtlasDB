@@ -13,9 +13,11 @@ REPORT_TYPES = {
         "date_range_days": 30,
     },
     "all-listings": {
+        # Always create a fresh report; US/CA share NA token so a reused DONE
+        # report may be cross-market.
         "report_type": "GET_MERCHANT_LISTINGS_ALL_DATA",
-        "reuse_done": True,
-        "reuse_window_hours": 48,
+        "reuse_done": False,
+        "reuse_window_hours": None,
         "date_range_days": None,
     },
     "stranded-inventory": {

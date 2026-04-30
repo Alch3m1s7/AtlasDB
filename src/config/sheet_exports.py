@@ -115,3 +115,88 @@ EXPORT_COLUMN_ORDER: dict[str, list[str]] = {
         "minimum-seller-allowed-price",
     ],
 }
+
+# Columns to convert to Python int or float before writing to Sheets.
+# Empty/null stays blank; invalid values become blank and increment a warning counter.
+# Text identifier columns (order IDs, ASINs, SKUs, etc.) are intentionally absent.
+NUMERIC_COLUMNS: dict[str, dict[str, list[str]]] = {
+    "orders-30d": {
+        "int": ["quantity"],
+        "decimal": [
+            "item-price", "item-tax", "shipping-price", "shipping-tax",
+            "gift-wrap-price", "gift-wrap-tax",
+            "item-promotion-discount", "ship-promotion-discount",
+        ],
+    },
+    "fba-inventory": {
+        "decimal": ["your-price", "per-unit-volume"],
+        "int": [
+            "mfn-fulfillable-quantity", "afn-warehouse-quantity",
+            "afn-fulfillable-quantity", "afn-unsellable-quantity",
+            "afn-reserved-quantity", "afn-total-quantity",
+            "afn-inbound-working-quantity", "afn-inbound-shipped-quantity",
+            "afn-inbound-receiving-quantity", "afn-researching-quantity",
+            "afn-reserved-future-supply", "afn-future-supply-buyable",
+        ],
+    },
+    "stranded-inventory": {
+        "int": ["fulfillable-qty", "unfulfillable-qty", "reserved-quantity", "inbound-shipped-qty"],
+        "decimal": ["your-price"],
+    },
+    "all-listings": {
+        "decimal": ["price", "minimum-seller-allowed-price"],
+        "int": [],
+    },
+}
+
+# Number format specs applied after each report tab write (data rows only, row 8+).
+# Ranges are absolute spreadsheet column positions, not relative to the export block.
+# Format types: "text" → Sheets TEXT (@), "int" → NUMBER 0, "decimal" → NUMBER 0.00
+#
+# orders-30d column layout (P7, 35 cols → P..AX):
+#   P1-14 (P:AC)  = text identifiers
+#   P15   (AD)    = quantity (int)
+#   P16   (AE)    = currency (text)
+#   P17-24 (AF:AM)= money cols (decimal)
+#   P25-35 (AN:AX)= ship/promo/buyer fields (text)
+#
+# fba-inventory column layout (P7, 22 cols → P..AK):
+#   Verified from live JSONL: sku,fnsku,asin,product-name,condition,your-price,
+#   mfn-listing-exists,mfn-fulfillable-quantity,afn-listing-exists,
+#   afn-warehouse..afn-total,per-unit-volume,afn-inbound-working..afn-future-supply-buyable,store
+#
+# stranded-inventory column layout (I7, 19 cols → I..AA):
+#   Verified from live JSONL: primary-action..fulfilled-by (text), fulfillable-qty,
+#   your-price, unfulfillable-qty..inbound-shipped-qty (int), program (text)
+NUMBER_FORMAT_SPECS: dict[str, list[tuple[str, str]]] = {
+    "orders-30d": [
+        ("P8:AC", "text"),      # amazon-order-id … item-status
+        ("AD8:AD", "int"),      # quantity
+        ("AE8:AE", "text"),     # currency
+        ("AF8:AM", "decimal"),  # item-price … ship-promotion-discount
+        ("AN8:AX", "text"),     # ship-city … buyer-identification-type
+    ],
+    "fba-inventory": [
+        ("P8:T", "text"),       # sku … condition
+        ("U8:U", "decimal"),    # your-price
+        ("V8:V", "text"),       # mfn-listing-exists
+        ("W8:W", "int"),        # mfn-fulfillable-quantity
+        ("X8:X", "text"),       # afn-listing-exists
+        ("Y8:AC", "int"),       # afn-warehouse-quantity … afn-total-quantity
+        ("AD8:AD", "decimal"),  # per-unit-volume
+        ("AE8:AJ", "int"),      # afn-inbound-working-quantity … afn-future-supply-buyable
+        ("AK8:AK", "text"),     # store
+    ],
+    "all-listings": [
+        ("A8:C", "text"),       # seller-sku, asin1, item-name
+        ("D8:D", "decimal"),    # price
+        ("E8:G", "text"),       # ProductTaxCode, status, minimum-seller-allowed-price
+    ],
+    "stranded-inventory": [
+        ("I8:U", "text"),       # primary-action … fulfilled-by
+        ("V8:V", "int"),        # fulfillable-qty
+        ("W8:W", "decimal"),    # your-price
+        ("X8:Z", "int"),        # unfulfillable-qty, reserved-quantity, inbound-shipped-qty
+        ("AA8:AA", "text"),     # program
+    ],
+}
