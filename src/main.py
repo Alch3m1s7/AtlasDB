@@ -60,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
         "command",
-        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
+        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
         help="Command to run",
     )
     parser.add_argument(
@@ -73,7 +73,13 @@ def main():
         "--report",
         choices=["fba-inventory", "orders-30d", "all-listings", "stranded-inventory", "all"],
         default=None,
-        help="Report type for ingest-report (use 'all' to run all 4 report types)",
+        help="Report type for ingest-report / export-sheets (use 'all' to run all 4)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Print export plan without authenticating or writing to Sheets",
     )
     args = parser.parse_args()
 
@@ -456,6 +462,59 @@ def main():
             print(f"  {r['marketplace']}/{r['report_key']}: {r['status']}  rows={rows_label}")
             if r.get("error"):
                 print(f"    error: {r['error']}")
+
+    elif args.command == "export-sheets":
+        from exports.sheet_exporter import export_report
+        from config.report_types import REPORT_KEYS
+
+        marketplace_code = args.marketplace
+        report_arg = args.report
+        dry_run = args.dry_run
+
+        if not report_arg:
+            parser.error("--report is required for export-sheets")
+
+        report_keys = REPORT_KEYS if report_arg == "all" else [report_arg]
+
+        results = []
+        for report_key in report_keys:
+            print(f"\n{'=' * 60}")
+            print(
+                f"export-sheets  marketplace={marketplace_code}  "
+                f"report={report_key}  dry_run={dry_run}"
+            )
+            print(f"{'=' * 60}")
+            try:
+                result = export_report(marketplace_code, report_key, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  ERROR: {exc}")
+                result = {
+                    "report_key": report_key,
+                    "status": "ERROR",
+                    "error": str(exc),
+                }
+            results.append(result)
+
+            status = result.get("status", "?")
+            if status not in ("DRY_RUN",):
+                print(f"  status : {status}")
+                if result.get("error"):
+                    print(f"  error  : {result['error']}")
+
+        if len(results) > 1:
+            print(f"\n{'=' * 60}")
+            print("SUMMARY")
+            print(f"{'=' * 60}")
+            for r in results:
+                rows_label = (
+                    str(r.get("row_count")) if r.get("row_count") is not None else "-"
+                )
+                print(
+                    f"  {marketplace_code}/{r.get('report_key', '?')}: "
+                    f"{r.get('status', '?')}  rows={rows_label}"
+                )
+                if r.get("error"):
+                    print(f"    error: {r['error']}")
 
     elif args.command == "probe-keepau-catalog":
         import json
