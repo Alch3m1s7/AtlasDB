@@ -6,10 +6,11 @@ SELECT
     MIN(observed_at)                                    AS observed_at,
     COUNT(*)                                            AS row_count,
     COUNT(featured_price)                               AS real_featured_price_count,
+    COUNT(*) FILTER (WHERE price_source = 'FALLBACK')  AS fallback_count,
     COUNT(DISTINCT featured_seller_id)
         FILTER (WHERE featured_seller_id IS NOT NULL)   AS featured_seller_id_count,
-    COUNT(lowest_price)                                 AS lowest_offer_count,
-    COUNT(referral_fee_rate_pct)                        AS referral_fee_rate_populated_count,
+    COUNT(lowest_price)                                 AS lowest_price_count,
+    COUNT(referral_fee)                                 AS referral_fee_populated_count,
     COUNT(fba_fee)                                      AS fba_fee_populated_count,
     AVG(featured_price)                                 AS avg_featured_price
 FROM staging.keepau_price_fee_probe
@@ -45,11 +46,12 @@ def get_recent_keepau_runs() -> list[dict]:
                 "observed_at": r[1],
                 "row_count": r[2],
                 "real_featured_price_count": r[3],
-                "featured_seller_id_count": r[4],
-                "lowest_offer_count": r[5],
-                "referral_fee_rate_populated_count": r[6],
-                "fba_fee_populated_count": r[7],
-                "avg_featured_price": float(r[8]) if r[8] is not None else None,
+                "fallback_count": r[4],
+                "featured_seller_id_count": r[5],
+                "lowest_price_count": r[6],
+                "referral_fee_populated_count": r[7],
+                "fba_fee_populated_count": r[8],
+                "avg_featured_price": float(r[9]) if r[9] is not None else None,
             }
             for r in rows
         ]
@@ -85,25 +87,25 @@ def print_keepau_latest() -> None:
         print("No KeepAU probe runs found in staging.keepau_price_fee_probe.")
         return
 
-    print("=" * 78)
+    print("=" * 88)
     print("KEEPAU - LAST 5 RUNS")
-    print("=" * 78)
+    print("=" * 88)
     hdr = (
-        f"{'#':<3} {'observed_at':<22} {'rows':>5} "
+        f"{'#':<3} {'observed_at':<22} {'rows':>5} {'fall':>5} "
         f"{'feat$':>6} {'feat_sel':>8} {'low$':>5} "
-        f"{'ref%':>5} {'fba':>5} {'avg_feat$':>10}  run_id"
+        f"{'ref$':>5} {'fba':>5} {'avg_feat$':>10}  run_id"
     )
     print(hdr)
-    print("-" * 78)
+    print("-" * 88)
     for i, run in enumerate(runs, 1):
         obs = run["observed_at"]
         obs_str = obs.strftime("%Y-%m-%d %H:%M:%S") if obs else "-"
         avg = f"{run['avg_featured_price']:.2f}" if run["avg_featured_price"] is not None else "-"
         print(
-            f"{i:<3} {obs_str:<22} {run['row_count']:>5} "
+            f"{i:<3} {obs_str:<22} {run['row_count']:>5} {run['fallback_count']:>5} "
             f"{run['real_featured_price_count']:>6} {run['featured_seller_id_count']:>8} "
-            f"{run['lowest_offer_count']:>5} "
-            f"{run['referral_fee_rate_populated_count']:>5} {run['fba_fee_populated_count']:>5} "
+            f"{run['lowest_price_count']:>5} "
+            f"{run['referral_fee_populated_count']:>5} {run['fba_fee_populated_count']:>5} "
             f"{avg:>10}  {run['run_id']}"
         )
     print()
@@ -111,10 +113,10 @@ def print_keepau_latest() -> None:
     latest_run_id = runs[0]["run_id"]
     detail = get_keepau_run_detail(latest_run_id)
 
-    print("=" * 78)
+    print("=" * 88)
     print(f"LATEST RUN DETAIL  run_id={latest_run_id}")
-    print(f"observed_at={runs[0]['observed_at']}  rows={runs[0]['row_count']}")
-    print("=" * 78)
+    print(f"observed_at={runs[0]['observed_at']}  rows={runs[0]['row_count']}  fallback={runs[0]['fallback_count']}")
+    print("=" * 88)
 
     def _f(v, fmt=".4f"):
         return format(v, fmt) if v is not None else "-"
@@ -138,4 +140,4 @@ def print_keepau_latest() -> None:
             f"{_f(row['referral_fee_rate_pct'], '.2f'):>6} "
             f"{_f(row['fba_fee'], '.4f'):>8} {_s(row['price_source']):<8}"
         )
-    print("=" * 78)
+    print("=" * 88)

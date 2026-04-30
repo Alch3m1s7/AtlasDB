@@ -76,6 +76,27 @@ def normalize_fba_inventory_row(row: dict) -> dict:
     return cleaned
 
 
+def parse_tab_delimited_report(file_path: str) -> list[dict]:
+    """Generic TSV parser: preserves original column names, strips whitespace, converts empty to None."""
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Report file not found: {path}")
+
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        rows = []
+        for row in reader:
+            cleaned = {}
+            for key, value in row.items():
+                k = key.strip() if key else key
+                v = value.strip() if value is not None else ""
+                cleaned[k] = None if v == "" else v
+            cleaned["_is_valid"] = True
+            cleaned["_validation_errors"] = []
+            rows.append(cleaned)
+    return rows
+
+
 def parse_fba_inventory_report(file_path: str) -> list[dict]:
     path = Path(file_path)
 

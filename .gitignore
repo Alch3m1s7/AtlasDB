@@ -1,157 +1,21 @@
-(.venv) PS C:\DevProjects-b\AtlasDB> pre-commit run --all-files
-trim trailing whitespace.................................................Passed
-fix end of files.........................................................Failed
-- hook id: end-of-file-fixer
-- exit code: 1
-- files were modified by this hook
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
 
-Fixing .gitignore
-Fixing requirements.txt
+# Secrets
+.env
 
-check yaml...............................................................Passed
-check json...........................................(no files to check)Skipped
-Detect secrets...........................................................Passed
-(.venv) PS C:\DevProjects-b\AtlasDB> git checkout HEAD -- requirements.txt
-(.venv) PS C:\DevProjects-b\AtlasDB> git diff -- requirements.txt
-(.venv) PS C:\DevProjects-b\AtlasDB> git status
-On branch main
-Your branch is ahead of 'origin/main' by 1 commit.
-  (use "git push" to publish your local commits)
+# Data — raw API responses, processed outputs, logs (large/ephemeral, not committed)
+data/raw/
+data/processed/
+data/logs/
 
-Changes to be committed:
-  (use "git restore --staged <file>..." to unstage)
-        deleted:    .claude/settings.local.json
-        modified:   .gitattributes
-        modified:   .gitignore
-        new file:   .pre-commit-config.yaml
-        new file:   .secrets.baseline
-        modified:   CLAUDE.md
-        modified:   README.md
-        new file:   config/keepau_probe_asins.txt
-        new file:   docs/keepau_sellersnap_field_validation.md
-        new file:   requirements-dev.txt
-        modified:   src/catalog/catalog_items.py
-        modified:   src/main.py
-        modified:   src/reports/report_parsers.py
+# Claude Code local settings
+.claude/
+src/.claude/
 
-Changes not staged for commit:
-  (use "git add <file>..." to update what will be committed)
-  (use "git restore <file>..." to discard changes in working directory)
-        modified:   .gitignore
-
-Untracked files:
-  (use "git add <file>..." to include in what will be committed)
-        .claude/
-        .env
-        data/logs/
-        data/processed/fba_inventory_uk_20260424_155318.jsonl
-        data/processed/fba_inventory_uk_20260424_160650.jsonl
-        data/processed/fba_inventory_uk_20260424_203957.jsonl
-        data/processed/fba_inventory_uk_20260424_224601.jsonl
-        data/processed/fba_inventory_uk_20260424_225718.jsonl
-        data/processed/fba_inventory_uk_20260426_200136.jsonl
-        data/processed/fba_inventory_uk_20260426_223557.jsonl
-        data/processed/fba_inventory_uk_20260426_231608.jsonl
-        data/processed/fba_inventory_uk_20260426_233310.jsonl
-        data/processed/fba_inventory_uk_20260427_005348.jsonl
-        data/processed/fba_inventory_uk_cleaned.jsonl
-        data/raw/catalog_probe/
-        data/raw/fba_inventory_uk_20260424_000609.txt
-        data/raw/fba_inventory_uk_20260424_155318.txt
-        data/raw/fba_inventory_uk_20260424_160650.txt
-        data/raw/fba_inventory_uk_20260424_203957.txt
-        data/raw/fba_inventory_uk_20260424_224601.txt
-        data/raw/fba_inventory_uk_20260424_225718.txt
-        data/raw/fba_inventory_uk_20260426_200136.txt
-        data/raw/fba_inventory_uk_20260426_223557.txt
-        data/raw/fba_inventory_uk_20260426_231608.txt
-        data/raw/fba_inventory_uk_20260426_233310.txt
-        data/raw/fba_inventory_uk_20260427_005348.txt
-        data/raw/fba_inventory_uk_raw.txt
-        data/raw/keepau_probe/
-        data/raw/marketplace_probe/
-        data/raw/pricing_access_probe/
-        src/.claude/
-        src/EXAMPLE--AU_FORMAT_B_pricing_access_20260429_102039.txt
-        src/Powershell-Terminal-Output.txt
-        src/__pycache__/
-        src/auth/__pycache__/
-        src/catalog/__pycache__/
-        src/db/__pycache__/
-        src/fees/__pycache__/
-        src/logs/__pycache__/
-        src/pricing/__pycache__/
-        src/reports/__pycache__/
-
-(.venv) PS C:\DevProjects-b\AtlasDB> git diff -- requirements.txt
-(.venv) PS C:\DevProjects-b\AtlasDB> git status
-On branch main
-Your branch is ahead of 'origin/main' by 1 commit.
-  (use "git push" to publish your local commits)
-
-Changes to be committed:
-  (use "git restore --staged <file>..." to unstage)
-        deleted:    .claude/settings.local.json
-        modified:   .gitattributes
-        modified:   .gitignore
-        new file:   .pre-commit-config.yaml
-        new file:   .secrets.baseline
-        modified:   CLAUDE.md
-        modified:   README.md
-        new file:   config/keepau_probe_asins.txt
-        new file:   docs/keepau_sellersnap_field_validation.md
-        new file:   requirements-dev.txt
-        modified:   src/catalog/catalog_items.py
-        modified:   src/main.py
-        modified:   src/reports/report_parsers.py
-
-Changes not staged for commit:
-  (use "git add <file>..." to update what will be committed)
-  (use "git restore <file>..." to discard changes in working directory)
-        modified:   .gitignore
-
-Untracked files:
-  (use "git add <file>..." to include in what will be committed)
-        .claude/
-        .env
-        data/logs/
-        data/processed/fba_inventory_uk_20260424_155318.jsonl
-        data/processed/fba_inventory_uk_20260424_160650.jsonl
-        data/processed/fba_inventory_uk_20260424_203957.jsonl
-        data/processed/fba_inventory_uk_20260424_224601.jsonl
-        data/processed/fba_inventory_uk_20260424_225718.jsonl
-        data/processed/fba_inventory_uk_20260426_200136.jsonl
-        data/processed/fba_inventory_uk_20260426_223557.jsonl
-        data/processed/fba_inventory_uk_20260426_231608.jsonl
-        data/processed/fba_inventory_uk_20260426_233310.jsonl
-        data/processed/fba_inventory_uk_20260427_005348.jsonl
-        data/processed/fba_inventory_uk_cleaned.jsonl
-        data/raw/catalog_probe/
-        data/raw/fba_inventory_uk_20260424_000609.txt
-        data/raw/fba_inventory_uk_20260424_155318.txt
-        data/raw/fba_inventory_uk_20260424_160650.txt
-        data/raw/fba_inventory_uk_20260424_203957.txt
-        data/raw/fba_inventory_uk_20260424_224601.txt
-        data/raw/fba_inventory_uk_20260424_225718.txt
-        data/raw/fba_inventory_uk_20260426_200136.txt
-        data/raw/fba_inventory_uk_20260426_223557.txt
-        data/raw/fba_inventory_uk_20260426_231608.txt
-        data/raw/fba_inventory_uk_20260426_233310.txt
-        data/raw/fba_inventory_uk_20260427_005348.txt
-        data/raw/fba_inventory_uk_raw.txt
-        data/raw/keepau_probe/
-        data/raw/marketplace_probe/
-        data/raw/pricing_access_probe/
-        src/.claude/
-        src/EXAMPLE--AU_FORMAT_B_pricing_access_20260429_102039.txt
-        src/Powershell-Terminal-Output.txt
-        src/__pycache__/
-        src/auth/__pycache__/
-        src/catalog/__pycache__/
-        src/db/__pycache__/
-        src/fees/__pycache__/
-        src/logs/__pycache__/
-        src/pricing/__pycache__/
-        src/reports/__pycache__/
-
-(.venv) PS C:\DevProjects-b\AtlasDB>
+# Scratch files in src
+src/Powershell-Terminal-Output.txt
+src/EXAMPLE--*.txt

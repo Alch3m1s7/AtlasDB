@@ -1,5 +1,7 @@
 import argparse
+import csv
 import os
+import sys
 from dotenv import load_dotenv
 from auth.spapi_auth import get_access_token
 from reports.report_requests import create_report, get_report_status, get_recent_done_report, EU_UK_MARKETPLACE_ID, REPORT_TYPE
@@ -23,6 +25,9 @@ from pricing.product_pricing import (
 from fees.product_fees import get_fees_estimate, print_fees_summary, extract_fee_amounts, FALLBACK_PRICE_AUD
 
 load_dotenv()
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 PARSE_FILE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "fba_inventory_uk_20260424_000609.txt")
 EXPORT_OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "fba_inventory_uk_cleaned.jsonl")
@@ -55,8 +60,20 @@ def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
         "command",
-        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
+        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
         help="Command to run",
+    )
+    parser.add_argument(
+        "--marketplace",
+        choices=["AU", "US", "CA", "UK", "DE"],
+        default="AU",
+        help="Marketplace code (default: AU)",
+    )
+    parser.add_argument(
+        "--report",
+        choices=["fba-inventory", "orders-30d", "all-listings", "stranded-inventory", "all"],
+        default=None,
+        help="Report type for ingest-report (use 'all' to run all 4 report types)",
     )
     args = parser.parse_args()
 
@@ -387,6 +404,59 @@ def main():
         )
         print_inventory_summary()
 
+    elif args.command == "ingest-report":
+        from reports.report_runner import run_report
+        from config.report_types import REPORT_KEYS
+
+        marketplace_code = args.marketplace
+        report_arg = args.report
+
+        if not report_arg:
+            parser.error("--report is required for ingest-report")
+
+        report_keys = REPORT_KEYS if report_arg == "all" else [report_arg]
+
+        results = []
+        for report_key in report_keys:
+            print(f"\n{'=' * 60}")
+            print(f"ingest-report  marketplace={marketplace_code}  report={report_key}")
+            print(f"{'=' * 60}")
+            try:
+                result = run_report(marketplace_code, report_key)
+            except Exception as exc:
+                print(f"[{marketplace_code}/{report_key}] UNHANDLED ERROR: {exc}")
+                results.append({
+                    "marketplace": marketplace_code,
+                    "report_key": report_key,
+                    "status": "ERROR",
+                    "error": str(exc),
+                    "row_count": None,
+                    "report_id": None,
+                    "report_document_id": None,
+                    "raw_path": None,
+                    "jsonl_path": None,
+                })
+                continue
+
+            results.append(result)
+            print(f"  status     : {result['status']}")
+            print(f"  report_id  : {result['report_id']}")
+            print(f"  document   : {result['report_document_id']}")
+            print(f"  raw        : {result['raw_path']}")
+            print(f"  jsonl      : {result['jsonl_path']}")
+            print(f"  rows       : {result['row_count']}")
+            if result.get("error"):
+                print(f"  error      : {result['error']}")
+
+        print(f"\n{'=' * 60}")
+        print("SUMMARY")
+        print(f"{'=' * 60}")
+        for r in results:
+            rows_label = str(r.get("row_count")) if r.get("row_count") is not None else "-"
+            print(f"  {r['marketplace']}/{r['report_key']}: {r['status']}  rows={rows_label}")
+            if r.get("error"):
+                print(f"    error: {r['error']}")
+
     elif args.command == "probe-keepau-catalog":
         import json
         import time
@@ -626,23 +696,55 @@ def main():
 
         FEES_INTER_ASIN_DELAY_S = 2
 
-        AU_MARKETPLACE_ID_PROBE = "A39IBJ37TRP1C6"
-        AU_BASE_URL_PROBE = "https://sellingpartnerapi-fe.amazon.com"
-        AU_TOKEN_ENV_VARS = ["SPAPI_REFRESH_TOKEN_AU", "SPAPI_REFRESH_TOKEN_FE"]
-        AU_FALLBACK_PRICE = FALLBACK_PRICE_AUD
-        AU_FALLBACK_CURRENCY = "AUD"
+        _marketplace_code = args.marketplace
+        _PROBE_CONFIGS = {
+            "AU": {
+                "marketplace_id": "A39IBJ37TRP1C6",
+                "base_url": "https://sellingpartnerapi-fe.amazon.com",
+                "token_env_vars": ["SPAPI_REFRESH_TOKEN_AU", "SPAPI_REFRESH_TOKEN_FE"],
+                "fallback_price": FALLBACK_PRICE_AUD,
+                "fallback_currency": "AUD",
+            },
+            "US": {
+                "marketplace_id": "ATVPDKIKX0DER",
+                "base_url": "https://sellingpartnerapi-na.amazon.com",
+                "token_env_vars": ["SPAPI_REFRESH_TOKEN_NA"],
+                "fallback_price": 20.00,
+                "fallback_currency": "USD",
+            },
+        }
+        _cfg = _PROBE_CONFIGS[_marketplace_code]
+        AU_MARKETPLACE_ID_PROBE = _cfg["marketplace_id"]
+        AU_BASE_URL_PROBE = _cfg["base_url"]
+        AU_TOKEN_ENV_VARS = _cfg["token_env_vars"]
+        AU_FALLBACK_PRICE = _cfg["fallback_price"]
+        AU_FALLBACK_CURRENCY = _cfg["fallback_currency"]
 
-        _PROBE_ASINS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "keepau_probe_asins.txt")
+        _config_dir = os.path.join(os.path.dirname(__file__), "..", "config")
+        if _marketplace_code == "AU":
+            _primary_asins_path = os.path.join(_config_dir, "probe_asins_au.txt")
+            _fallback_asins_path = os.path.join(_config_dir, "keepau_probe_asins.txt")
+            if os.path.exists(_primary_asins_path):
+                _PROBE_ASINS_PATH = _primary_asins_path
+            else:
+                _PROBE_ASINS_PATH = _fallback_asins_path
+                print(f"  [warn] probe_asins_au.txt not found — using fallback keepau_probe_asins.txt")
+        else:
+            _PROBE_ASINS_PATH = os.path.join(_config_dir, f"probe_asins_{_marketplace_code.lower()}.txt")
         AU_PROBE_ASINS = _load_probe_asins(_PROBE_ASINS_PATH)
-        print(f"Loaded {len(AU_PROBE_ASINS)} ASINs from {os.path.abspath(_PROBE_ASINS_PATH)}")
+        _probe_asins_file_used = os.path.abspath(_PROBE_ASINS_PATH)
+        print(f"Loaded {len(AU_PROBE_ASINS)} ASINs from {_probe_asins_file_used}")
 
         probe_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw", "marketplace_probe")
         os.makedirs(probe_dir, exist_ok=True)
-        observed_at_utc = datetime.now(timezone.utc)
+        probe_start_time = datetime.now(timezone.utc)
+        observed_at_utc = probe_start_time
         timestamp = f"{observed_at_utc:%Y%m%d_%H%M%S}"
         run_id = str(uuid.uuid4())
 
-        # ASIN validation
+        # ASIN validation — invalid ASINs are skipped, not passed to API
+        import re as _re
+        _ASIN_RE = _re.compile(r"^[A-Z0-9]{10}$")
         seen_asins: set[str] = set()
         duplicates_removed: list[str] = []
         invalid_asins: list[str] = []
@@ -653,22 +755,28 @@ def main():
                 duplicates_removed.append(_a)
                 continue
             seen_asins.add(_a)
-            if len(_a) != 10:
+            if not _ASIN_RE.match(_a):
                 invalid_asins.append(_a)
+                continue
             active_asins.append(_a)
 
-        print("=== AU 20-ASIN Pricing + Fees probe ===")
+        print(f"=== {_marketplace_code} Pricing + Fees probe ===")
         print(f"ASIN validation:")
         print(f"  Input              : {len(AU_PROBE_ASINS)}")
-        print(f"  After dedup        : {len(active_asins)}")
-        print(f"  Duplicates removed : {duplicates_removed if duplicates_removed else 'none'}")
-        print(f"  Invalid (!=10 chars): {invalid_asins if invalid_asins else 'none'}")
-        print(f"  Active ASINs       : {active_asins}")
-        print(f"Market    : AU  marketplace_id={AU_MARKETPLACE_ID_PROBE}")
+        print(f"  Duplicates removed : {len(duplicates_removed)}  {duplicates_removed if duplicates_removed else ''}")
+        print(f"  Invalid skipped    : {len(invalid_asins)}  {invalid_asins if invalid_asins else ''}")
+        print(f"  Active ASINs       : {len(active_asins)}")
+        print(f"Market    : {_marketplace_code}  marketplace_id={AU_MARKETPLACE_ID_PROBE}")
         print(f"Output dir: {os.path.abspath(probe_dir)}")
         print(f"Timestamp : {timestamp}Z")
         print(f"Fees delay: {FEES_INTER_ASIN_DELAY_S}s between ASINs")
         print()
+        if _marketplace_code == "US":
+            print("=" * 70)
+            print("WARNING: US mode is for known-answer validation only.")
+            print("It does not validate AU marketplace coverage.")
+            print("=" * 70)
+            print()
 
         # Token
         au_refresh_token_probe = next(
@@ -678,7 +786,7 @@ def main():
             (v for v in AU_TOKEN_ENV_VARS if os.getenv(v)), None
         )
         if not au_refresh_token_probe:
-            raise RuntimeError(f"Set {AU_TOKEN_ENV_VARS[0]} or {AU_TOKEN_ENV_VARS[1]} in .env")
+            raise RuntimeError(f"Set one of {AU_TOKEN_ENV_VARS} in .env for {_marketplace_code} marketplace")
         au_token_probe = get_access_token(au_refresh_token_probe)
         print(f"Token     : {au_token_source_probe}  OK")
         print()
@@ -762,6 +870,7 @@ def main():
 
         # --- Step 1: Catalog (summaries + dimensions) — batched, max 10 per call ---
         CATALOG_BATCH_SIZE = 10
+        _CATALOG_BACKOFF_S = [5, 15, 30]
         print(f"--- Step 1: Catalog (summaries + dimensions, {CATALOG_BATCH_SIZE}/batch) ---")
         catalog_by_asin: dict[str, dict] = {}
         catalog_rid = "?"
@@ -770,20 +879,35 @@ def main():
             for i in range(0, len(active_asins), CATALOG_BATCH_SIZE)
         ]
         _catalog_raw_batches: list[dict] = []
+        _catalog_retry_count = 0
         for _bidx, _batch in enumerate(_catalog_batches):
-            t_req = datetime.now(timezone.utc)
-            _batch_data = search_catalog_items(
-                base_url=AU_BASE_URL_PROBE,
-                access_token=au_token_probe,
-                asins=_batch,
-                marketplace_id=AU_MARKETPLACE_ID_PROBE,
-                included_data=["summaries", "dimensions"],
-            )
-            t_resp = datetime.now(timezone.utc)
-            _log_step(
-                f"catalog/search batch {_bidx + 1}/{len(_catalog_batches)} ({len(_batch)} ASINs)",
-                t_req, t_resp, _batch_data,
-            )
+            _batch_data = None
+            for _attempt in range(4):  # 1 original + 3 retries
+                if _attempt > 0:
+                    _ra = _batch_data.get("_retry_after") if _batch_data else None
+                    try:
+                        _cat_delay = int(float(_ra)) if _ra else _CATALOG_BACKOFF_S[_attempt - 1]
+                    except (ValueError, TypeError):
+                        _cat_delay = _CATALOG_BACKOFF_S[_attempt - 1]
+                    print(f"      [catalog batch {_bidx + 1} retry {_attempt}/3 — waiting {_cat_delay}s]")
+                    time.sleep(_cat_delay)
+                    _catalog_retry_count += 1
+                t_req = datetime.now(timezone.utc)
+                _batch_data = search_catalog_items(
+                    base_url=AU_BASE_URL_PROBE,
+                    access_token=au_token_probe,
+                    asins=_batch,
+                    marketplace_id=AU_MARKETPLACE_ID_PROBE,
+                    included_data=["summaries", "dimensions"],
+                )
+                t_resp = datetime.now(timezone.utc)
+                _log_step(
+                    f"catalog/search batch {_bidx + 1}/{len(_catalog_batches)} ({len(_batch)} ASINs)"
+                    + (f" [attempt {_attempt + 1}]" if _attempt > 0 else ""),
+                    t_req, t_resp, _batch_data,
+                )
+                if _batch_data.get("_error") != "THROTTLED":
+                    break
             _catalog_raw_batches.append(_batch_data)
             if "_error" not in _batch_data:
                 if catalog_rid == "?":
@@ -792,31 +916,76 @@ def main():
                     _k = _item.get("asin")
                     if _k:
                         catalog_by_asin[_k] = _item
-        catalog_path = os.path.join(probe_dir, f"AU_catalog_{timestamp}.json")
+        catalog_path = os.path.join(probe_dir, f"{_marketplace_code}_catalog_{timestamp}.json")
         with open(catalog_path, "w", encoding="utf-8") as f:
             json.dump({"batches": _catalog_raw_batches}, f, indent=2)
         print(f"    saved: {catalog_path}")
         print(f"    catalog items found: {len(catalog_by_asin)}/{len(active_asins)}")
         print()
 
-        # --- Step 2: Competitive pricing batch (FORMAT_B) ---
-        print("--- Step 2: Competitive pricing batch ---")
-        t_req = datetime.now(timezone.utc)
-        pricing_data = get_competitive_summary_batch(
-            base_url=AU_BASE_URL_PROBE,
-            access_token=au_token_probe,
-            asins=active_asins,
-            marketplace_id=AU_MARKETPLACE_ID_PROBE,
-        )
-        t_resp = datetime.now(timezone.utc)
-        _log_step("pricing/competitiveSummary (POST batch)", t_req, t_resp, pricing_data)
-        pricing_path = os.path.join(probe_dir, f"AU_pricing_{timestamp}.json")
+        # --- Step 2: Competitive pricing (batched ≤20/call — API hard limit) ---
+        PRICING_BATCH_SIZE = 20
+        PRICING_INTER_BATCH_DELAY_S = 2
+        _PRICING_BACKOFF_S = [10, 30, 60]
+        _pricing_batches = [
+            active_asins[i:i + PRICING_BATCH_SIZE]
+            for i in range(0, len(active_asins), PRICING_BATCH_SIZE)
+        ]
+        print(f"--- Step 2: Competitive pricing ({PRICING_BATCH_SIZE}/batch, {len(_pricing_batches)} batch(es)) ---")
+        pricing_by_asin: dict[str, dict] = {}
+        pricing_failed_asins: set[str] = set()
+        pricing_http: str = "?"
+        pricing_rid: str = "?"
+        _pricing_raw_batches: list[dict] = []
+        _pricing_retry_count = 0
+        for _pidx, _pbatch in enumerate(_pricing_batches):
+            if _pidx > 0:
+                time.sleep(PRICING_INTER_BATCH_DELAY_S)
+            _pricing_resp = None
+            for _attempt in range(4):  # 1 original + 3 retries
+                if _attempt > 0:
+                    _ra = _pricing_resp.get("_retry_after") if _pricing_resp else None
+                    try:
+                        _pr_delay = int(float(_ra)) if _ra else _PRICING_BACKOFF_S[_attempt - 1]
+                    except (ValueError, TypeError):
+                        _pr_delay = _PRICING_BACKOFF_S[_attempt - 1]
+                    print(f"      [pricing batch {_pidx + 1} retry {_attempt}/3 — waiting {_pr_delay}s]")
+                    time.sleep(_pr_delay)
+                    _pricing_retry_count += 1
+                t_req = datetime.now(timezone.utc)
+                _pricing_resp = get_competitive_summary_batch(
+                    base_url=AU_BASE_URL_PROBE,
+                    access_token=au_token_probe,
+                    asins=_pbatch,
+                    marketplace_id=AU_MARKETPLACE_ID_PROBE,
+                )
+                t_resp = datetime.now(timezone.utc)
+                _log_step(
+                    f"pricing batch {_pidx + 1}/{len(_pricing_batches)} ({len(_pbatch)} ASINs)"
+                    + (f" [attempt {_attempt + 1}]" if _attempt > 0 else ""),
+                    t_req, t_resp, _pricing_resp,
+                )
+                if _pricing_resp.get("_error") != "THROTTLED":
+                    break
+            _pricing_raw_batches.append(_pricing_resp)
+            _pmeta = _pricing_resp.get("_meta") or {}
+            if "_error" not in _pricing_resp:
+                if pricing_http == "?":
+                    pricing_http = str(_pmeta.get("status", "?"))
+                if pricing_rid == "?":
+                    pricing_rid = _pmeta.get("request_id") or "?"
+                pricing_by_asin.update(extract_pricing_by_asin(_pricing_resp))
+            else:
+                if pricing_http == "?":
+                    pricing_http = str(_pmeta.get("status") or _pricing_resp.get("_status", "?"))
+                for _fa in _pbatch:
+                    pricing_failed_asins.add(_fa)
+                print(f"      [pricing batch {_pidx + 1} FAILED after retries — {len(_pbatch)} ASINs marked PRICING_FAILED]")
+        pricing_path = os.path.join(probe_dir, f"{_marketplace_code}_pricing_{timestamp}.json")
         with open(pricing_path, "w", encoding="utf-8") as f:
-            json.dump(pricing_data, f, indent=2)
+            json.dump({"batches": _pricing_raw_batches}, f, indent=2)
         print(f"    saved: {pricing_path}")
-        pricing_rid = (pricing_data.get("_meta") or {}).get("request_id") or "?"
-        pricing_http = (pricing_data.get("_meta") or {}).get("status") or pricing_data.get("_status", "?")
-        pricing_by_asin = extract_pricing_by_asin(pricing_data)
+        print(f"    pricing items found: {len(pricing_by_asin)}/{len(active_asins)}")
         print()
 
         # --- Step 3: Fees per ASIN (2s between calls) ---
@@ -831,10 +1000,14 @@ def main():
                 _listing_price = _feat["price"]
                 _fee_currency = _feat["currency"] or AU_FALLBACK_CURRENCY
                 _price_src = "REAL"
+            elif _asin in pricing_failed_asins:
+                _listing_price = AU_FALLBACK_PRICE
+                _fee_currency = AU_FALLBACK_CURRENCY
+                _price_src = "PRICING_FAILED"
             else:
                 _listing_price = AU_FALLBACK_PRICE
                 _fee_currency = AU_FALLBACK_CURRENCY
-                _price_src = "FALLBACK"
+                _price_src = "NO_OFFER"
             prices_used[_asin] = (_listing_price, _fee_currency, _price_src)
             t_req = datetime.now(timezone.utc)
             _fee_resp = get_fees_estimate(
@@ -851,7 +1024,7 @@ def main():
                 f"fees/estimate {_asin} @ {_listing_price} {_fee_currency} [{_price_src}]",
                 t_req, t_resp, _fee_resp,
             )
-        fees_path = os.path.join(probe_dir, f"AU_fees_{timestamp}.json")
+        fees_path = os.path.join(probe_dir, f"{_marketplace_code}_fees_{timestamp}.json")
         with open(fees_path, "w", encoding="utf-8") as f:
             json.dump(fees_by_asin, f, indent=2)
         print(f"    saved: {fees_path}")
@@ -918,7 +1091,7 @@ def main():
 
         print()
         print("=" * 110)
-        print("AU 20-ASIN PRICING + FEES — compact table (2 lines per ASIN)")
+        print(f"{_marketplace_code} PRICING + FEES — compact table (2 lines per ASIN)")
         print("=" * 110)
         h1 = (f"{'ASIN':<12} {'TITLE':<30} {'BRAND':<13} {'FEAT.PRICE':>10} "
               f"{'FEAT.SELLER':<14} {'CURR':<5} {'FUL':<4} {'CND':<4} {'SRC':<8}")
@@ -947,28 +1120,154 @@ def main():
 
         # --- End-of-probe summary ---
         n = len(active_asins)
-        real_count = sum(1 for r in all_rows if r["feat_price"] is not None)
+        catalog_found = len(catalog_by_asin)
+        real_count = sum(1 for r in all_rows if r["price_src"] == "REAL")
+        no_offer_count = sum(1 for r in all_rows if r["price_src"] == "NO_OFFER")
+        pricing_failed_count = sum(1 for r in all_rows if r["price_src"] == "PRICING_FAILED")
+        fallback_count = no_offer_count + pricing_failed_count
         feat_seller_count = sum(1 for r in all_rows if r["feat_seller"] is not None)
+        low_price_count = sum(1 for r in all_rows if r["low_price"] is not None)
         low_seller_count = sum(1 for r in all_rows if r["low_seller"] is not None)
         fees_ok = sum(
             1 for a in active_asins
             if (fees_by_asin.get(a, {}).get("_meta") or {}).get("status") == 200
         )
-        ref_pct_count = sum(1 for r in all_rows if r["referral_pct"] is not None)
+        fees_status_counts: dict[str, int] = {}
+        for _a in active_asins:
+            _fee_resp = fees_by_asin.get(_a, {})
+            if "_error" in _fee_resp:
+                _st = "HTTP_ERROR"
+            else:
+                _payload = _fee_resp.get("payload") or {}
+                _result_obj = _payload.get("FeesEstimateResult") or {}
+                _st = _result_obj.get("Status") or "NO_PAYLOAD"
+            fees_status_counts[_st] = fees_status_counts.get(_st, 0) + 1
+        ref_fee_count = sum(1 for r in all_rows if r["referral_fee"] is not None)
         fba_count = sum(1 for r in all_rows if r["fba_fee"] is not None)
+
+        inserted = insert_keepau_price_fee_probe_rows(
+            rows=all_rows,
+            raw_paths={"catalog": catalog_path, "pricing": pricing_path, "fees": fees_path},
+            run_id=run_id,
+            observed_at=observed_at_utc,
+            marketplace_id=AU_MARKETPLACE_ID_PROBE,
+        )
+        runtime_s = (datetime.now(timezone.utc) - probe_start_time).total_seconds()
+
+        if n > 0 and pricing_failed_count / n > 0.25:
+            print()
+            print("=" * 70)
+            print("WARNING: This run is NOT suitable for price validation.")
+            print(f"Pricing API failed/throttled for {pricing_failed_count}/{n} ASINs "
+                  f"({pricing_failed_count / n:.0%}).")
+            print("=" * 70)
+
+        # --- Failure / missing-data CSV ---
+        _failures_dir = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "probe_failures")
+        os.makedirs(_failures_dir, exist_ok=True)
+        _fail_csv_filename = f"probe_failures_{_marketplace_code}_{timestamp}.csv"
+        _fail_csv_path = os.path.join(_failures_dir, _fail_csv_filename)
+        _fail_fields = [
+            "run_id", "observed_at", "marketplace_code", "marketplace_id", "asin",
+            "catalog_found", "pricing_found", "used_fallback_price", "pricing_status",
+            "missing_featured_price", "missing_featured_seller_id",
+            "missing_lowest_price", "missing_lowest_seller_id",
+            "missing_referral_fee", "missing_fba_fee",
+            "fee_status", "fee_error_message",
+            "raw_catalog_path", "raw_pricing_path", "raw_fees_path",
+            "missing_bsr", "bsr_source", "bsr_error_message",
+        ]
+        _fail_rows_written = 0
+        with open(_fail_csv_path, "w", newline="", encoding="utf-8") as _ff:
+            _fail_writer = csv.DictWriter(_ff, fieldnames=_fail_fields)
+            _fail_writer.writeheader()
+            for _row in all_rows:
+                _used_fallback = _row.get("price_src") == "FALLBACK"
+                _miss_feat_price = _row.get("feat_price") is None
+                _miss_feat_seller = _row.get("feat_seller") is None
+                _miss_low_price = _row.get("low_price") is None
+                _miss_low_seller = _row.get("low_seller") is None
+                _miss_ref_fee = _row.get("referral_fee") is None
+                _miss_fba = _row.get("fba_fee") is None
+                if not any([_used_fallback, _miss_feat_price, _miss_feat_seller,
+                            _miss_low_price, _miss_low_seller, _miss_ref_fee, _miss_fba]):
+                    continue
+                _cat_found = _row["asin"] in catalog_by_asin
+                _fee_r2 = fees_by_asin.get(_row["asin"], {})
+                if "_error" in _fee_r2:
+                    _fail_fee_status = _fee_r2.get("_error", "HTTP_ERROR")
+                    _fail_fee_err = (_fee_r2.get("_body") or "")[:200]
+                else:
+                    _f2_result = (_fee_r2.get("payload") or {}).get("FeesEstimateResult") or {}
+                    _fail_fee_status = _f2_result.get("Status") or "NO_PAYLOAD"
+                    _f2_err = _f2_result.get("Error") or {}
+                    _fail_fee_err = _f2_err.get("Message", "") if isinstance(_f2_err, dict) else str(_f2_err)
+                _fail_writer.writerow({
+                    "run_id": run_id,
+                    "observed_at": observed_at_utc.isoformat(),
+                    "marketplace_code": _marketplace_code,
+                    "marketplace_id": AU_MARKETPLACE_ID_PROBE,
+                    "asin": _row["asin"],
+                    "catalog_found": "TRUE" if _cat_found else "FALSE",
+                    "pricing_found": "FALSE" if _used_fallback else "TRUE",
+                    "used_fallback_price": "TRUE" if _used_fallback else "FALSE",
+                    "pricing_status": _row.get("price_src", ""),
+                    "missing_featured_price": "TRUE" if _miss_feat_price else "FALSE",
+                    "missing_featured_seller_id": "TRUE" if _miss_feat_seller else "FALSE",
+                    "missing_lowest_price": "TRUE" if _miss_low_price else "FALSE",
+                    "missing_lowest_seller_id": "TRUE" if _miss_low_seller else "FALSE",
+                    "missing_referral_fee": "TRUE" if _miss_ref_fee else "FALSE",
+                    "missing_fba_fee": "TRUE" if _miss_fba else "FALSE",
+                    "fee_status": _fail_fee_status,
+                    "fee_error_message": _fail_fee_err or "",
+                    "raw_catalog_path": catalog_path,
+                    "raw_pricing_path": pricing_path,
+                    "raw_fees_path": fees_path,
+                    "missing_bsr": "",
+                    "bsr_source": "",
+                    "bsr_error_message": "",
+                })
+                _fail_rows_written += 1
 
         print()
         print("=" * 70)
         print("END-OF-PROBE SUMMARY")
         print("=" * 70)
+        print(f"Marketplace                   : {_marketplace_code}")
+        print(f"Marketplace ID                : {AU_MARKETPLACE_ID_PROBE}")
+        print(f"ASIN input file               : {_probe_asins_file_used}")
+        print(f"Active ASINs                  : {n}  (invalid skipped: {len(invalid_asins)}  dupes: {len(duplicates_removed)})")
+        print(f"Catalog 429 retries           : {_catalog_retry_count}")
+        print(f"Pricing 429 retries           : {_pricing_retry_count}")
         print(f"Pricing HTTP                  : {pricing_http}")
         print(f"ASINs tested                  : {n}")
-        print(f"Real featured prices found    : {real_count}/{n}")
+        print(f"Catalog items found           : {catalog_found}/{n}")
+        print(f"Real featured prices          : {real_count}/{n}")
+        print(f"Fallback (no offer)           : {no_offer_count}/{n}")
+        print(f"Fallback (pricing failed)     : {pricing_failed_count}/{n}")
         print(f"Featured sellerIds returned   : {feat_seller_count}/{n}")
+        print(f"Lowest offer prices returned  : {low_price_count}/{n}")
         print(f"Lowest offer sellerIds        : {low_seller_count}/{n}")
-        print(f"Fees success (HTTP 200)       : {fees_ok}/{n}")
-        print(f"Referral rate calculated      : {ref_pct_count}/{n}")
-        print(f"FBA fee returned              : {fba_count}/{n}")
+        print(f"Fees HTTP 200                 : {fees_ok}/{n}")
+        _fees_success = fees_status_counts.get("Success", 0)
+        _fees_server = fees_status_counts.get("ServerError", 0)
+        _fees_client = fees_status_counts.get("ClientError", 0)
+        _fees_other_total = sum(
+            v for k, v in fees_status_counts.items()
+            if k not in ("Success", "ServerError", "ClientError")
+        )
+        print(f"  FeesEstimate Success        : {_fees_success}/{n}")
+        print(f"  FeesEstimate ServerError    : {_fees_server}/{n}")
+        print(f"  FeesEstimate ClientError    : {_fees_client}/{n}")
+        if _fees_other_total:
+            _other_keys = [k for k in fees_status_counts
+                           if k not in ("Success", "ServerError", "ClientError")]
+            print(f"  FeesEstimate other          : {_fees_other_total}  {_other_keys}")
+        print(f"Referral fee populated        : {ref_fee_count}/{n}")
+        print(f"FBA fee populated             : {fba_count}/{n}")
+        print(f"Total runtime                 : {runtime_s:.1f}s")
+        print(f"Inserted rows                 : {inserted}  run_id={run_id}")
+        print(f"Failure CSV                   : {os.path.abspath(_fail_csv_path)}  ({_fail_rows_written} rows)")
         print()
         print("Missing fields by ASIN:")
         _any_missing = False
@@ -984,8 +1283,6 @@ def main():
                 _missing.append("low_seller_id")
             if row["referral_fee"] is None:
                 _missing.append("referral_fee")
-            if row["referral_pct"] is None:
-                _missing.append("ref_pct")
             if row["fba_fee"] is None:
                 _missing.append("fba_fee")
             if _missing:
@@ -999,15 +1296,53 @@ def main():
         print(f"  {pricing_path}")
         print(f"  {fees_path}")
 
-        inserted = insert_keepau_price_fee_probe_rows(
-            rows=all_rows,
-            raw_paths={"catalog": catalog_path, "pricing": pricing_path, "fees": fees_path},
-            run_id=run_id,
-            observed_at=observed_at_utc,
-            marketplace_id=AU_MARKETPLACE_ID_PROBE,
-        )
-        print()
-        print(f"DB insert: {inserted} rows -> staging.keepau_price_fee_probe  run_id={run_id}")
+        # --- CSV validation export ---
+        _validation_dir = os.path.join(os.path.dirname(__file__), "..", "data", "processed", "validation")
+        os.makedirs(_validation_dir, exist_ok=True)
+        _csv_filename = f"{_marketplace_code.lower()}_price_fee_validation_{timestamp}.csv"
+        _csv_path = os.path.join(_validation_dir, _csv_filename)
+        _csv_fields = [
+            "asin", "marketplace_code", "marketplace_id", "title", "brand",
+            "featured_price", "featured_currency", "featured_seller_id",
+            "lowest_offer_price", "lowest_offer_currency", "lowest_offer_seller_id",
+            "referral_fee", "fba_fee", "fee_status", "fee_error_message",
+            "pricing_status", "used_fallback_price", "observed_at", "ingestion_run_id",
+        ]
+        with open(_csv_path, "w", newline="", encoding="utf-8") as _f:
+            _writer = csv.DictWriter(_f, fieldnames=_csv_fields)
+            _writer.writeheader()
+            for _row in all_rows:
+                _fee_r = fees_by_asin.get(_row["asin"], {})
+                if "_error" in _fee_r:
+                    _fee_status = _fee_r.get("_error", "HTTP_ERROR")
+                    _fee_err_msg = (_fee_r.get("_body") or "")[:200]
+                else:
+                    _f_result = (_fee_r.get("payload") or {}).get("FeesEstimateResult") or {}
+                    _fee_status = _f_result.get("Status") or "NO_PAYLOAD"
+                    _f_err = _f_result.get("Error") or {}
+                    _fee_err_msg = _f_err.get("Message", "") if isinstance(_f_err, dict) else str(_f_err)
+                _writer.writerow({
+                    "asin": _row["asin"],
+                    "marketplace_code": _marketplace_code,
+                    "marketplace_id": AU_MARKETPLACE_ID_PROBE,
+                    "title": _row.get("title") or "",
+                    "brand": _row.get("brand") or "",
+                    "featured_price": "" if _row.get("feat_price") is None else _row["feat_price"],
+                    "featured_currency": _row.get("feat_currency") or "",
+                    "featured_seller_id": _row.get("feat_seller") or "",
+                    "lowest_offer_price": "" if _row.get("low_price") is None else _row["low_price"],
+                    "lowest_offer_currency": _row.get("low_currency") or "",
+                    "lowest_offer_seller_id": _row.get("low_seller") or "",
+                    "referral_fee": "" if _row.get("referral_fee") is None else _row["referral_fee"],
+                    "fba_fee": "" if _row.get("fba_fee") is None else _row["fba_fee"],
+                    "fee_status": _fee_status,
+                    "fee_error_message": _fee_err_msg or "",
+                    "pricing_status": _row.get("price_src", ""),
+                    "used_fallback_price": "FALSE" if _row.get("price_src") == "REAL" else "TRUE",
+                    "observed_at": observed_at_utc.isoformat(),
+                    "ingestion_run_id": run_id,
+                })
+        print(f"Validation CSV    : {os.path.abspath(_csv_path)}")
 
     elif args.command == "probe-pricing-access":
         import json

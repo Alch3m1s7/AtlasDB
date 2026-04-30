@@ -6,11 +6,22 @@ EU_UK_MARKETPLACE_ID = "A1F83G8C2ARO7P"
 REPORT_TYPE = "GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA"
 
 
-def create_report(base_url: str, access_token: str, marketplace_id: str, report_type: str) -> str:
-    body = {
+def create_report(
+    base_url: str,
+    access_token: str,
+    marketplace_id: str,
+    report_type: str,
+    data_start_time: str | None = None,
+    data_end_time: str | None = None,
+) -> str:
+    body: dict = {
         "reportType": report_type,
         "marketplaceIds": [marketplace_id],
     }
+    if data_start_time is not None:
+        body["dataStartTime"] = data_start_time
+    if data_end_time is not None:
+        body["dataEndTime"] = data_end_time
     print(f"[create_report] POST body: {json.dumps(body)}")
 
     response = requests.post(

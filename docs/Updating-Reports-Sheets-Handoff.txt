@@ -1,0 +1,1336 @@
+
+
+
+
+## 1. System Purpose
+
+This system is a PostgreSQL/Supabase-backed Amazon reseller data platform for operational inventory tracking, large-scale ASIN intelligence, and AU marketplace historical tracking. Its first real-world goal is to replace fragile Google Sheets workflows with reliable Python ingestion, audit logs, snapshot identity, and queryable marketplace data.
+
+---
+
+## 2. Current System State
+
+| Component                            | Status                             | Notes                                                                                             |
+| ------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Claude Code                          | Working                            | Used successfully for audit and code changes.                                                     |
+| Cursor + PowerShell                  | Working                            | Main development/execution environment.                                                           |
+| Git/GitHub                           | Implemented / needs current commit | Repo exists; current latest changes should be committed after cleanup.                            |
+| Python venv                          | Working                            | Commands run from C:\DevProjects-b\AtlasDB\src.                                                 |
+| SP-API auth                          | Working                            | Access token exchange works.                                                                      |
+| SP-API recent DONE report reuse      | Validated                          | get_recent_done_report found 10 DONE reports and reused report 2393720020567.                 |
+| SP-API download → parse → JSONL → DB | Validated                          | Latest SP-API test downloaded, exported, inserted 233 rows.                                       |
+| Snapshot identity                    | Validated                          | Latest insert created snapshot_id = b4aca79b-5f3b-43ec-9359-690a75e4711a.                       |
+| Latest snapshot query                | Validated                          | Query now reports 233 latest rows, not cumulative historical rows.                                |
+| test-ingest command                | Should be removed if still present | It was added as a temporary local test helper; not production-safe to keep.                       |
+| Final Atlas architecture             | Planned / locked conceptually      | One PostgreSQL DB with schemas: atlas, atlas_core, keepau, staging, audit, reference. |
+
+---
+
+## 3. Core Architecture Overview
+
+### Inputs
+
+* Amazon SP-API reports.
+* Seller Central report types:
+
+  * GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA
+  * future: All Listings, Stranded Inventory, All Orders.
+* Keepa XLSX exports.
+* Analyzer.tools XLSX exports.
+* SellerSnap / BQool reports later.
+* Fixed FX rates currently stored in Google Sheets; later in config or reference.fx_rates.
+
+### Processing layer
+
+* Python CLI project under:
+
+text
+C:\DevProjects-b\AtlasDB\src
+
+
+* Claude Code used for safe edits/refactors.
+* Cursor + PowerShell used for execution/testing.
+* Future scheduling via laptop first, then VPS if useful.
+
+### Storage
+
+* Raw files:
+
+text
+data/raw/
+
+
+* Processed JSONL:
+
+text
+data/processed/
+
+
+* PostgreSQL/Supabase:
+
+  * Current working tables: fba_inventory_snapshots, fba_inventory_imports
+  * Planned schemas: atlas, atlas_core, keepau, staging, audit, reference
+
+### Outputs
+
+* Inventory snapshot summaries.
+* Latest operational inventory view.
+* Future cross-market ASIN opportunity queries.
+* Future AU historical “mini-Keepa” dataset.
+
+---
+
+## 4. Key Components & Responsibilities
+
+| Component              | Responsibility                                                         | Maturity                       |
+| ---------------------- | ---------------------------------------------------------------------- | ------------------------------ |
+| SP-API Report Pipeline | Reuse recent DONE reports, download raw reports, parse, export, insert | MVP validated                  |
+| Snapshot Identity      | Group one ingestion batch under one UUID                               | Validated                      |
+| Latest Snapshot Query  | Prevent cumulative historical distortion                               | Validated                      |
+| Atlas Core             | Operational seller inventory/listings/order data                       | Conceptual / partially started |
+| Atlas                  | Large ASIN marketplace intelligence across UK/US/CA/DE/AU              | Planned                        |
+| KeepAU                 | AU historical Buy Box/BSR/seller-count tracking                        | Planned, high priority         |
+| Staging                | Temporary XLSX/report landing tables                                   | Planned                        |
+| Audit                  | Ingestion run tracking, report IDs, row counts, errors                 | Partial / planned expansion    |
+| Reference              | Marketplaces and fixed FX rates                                        | Planned                        |
+
+---
+
+## 5. Data Flow
+
+### Current validated flow
+
+1. Trigger:
+
+powershell
+python main.py ingest-spapi
+
+
+2. SP-API checks recent DONE reports.
+3. If recent DONE report exists, system reuses it instead of creating a new report.
+4. Downloads raw tab-delimited inventory report.
+5. Parses and normalises rows.
+6. Exports JSONL.
+7. Inserts valid rows into PostgreSQL.
+8. Generates one snapshot_id for that batch.
+9. Prints latest-snapshot inventory summary.
+
+Validated output:
+
+text
+Inserted rows: 233
+Total rows: 233
+Unique SKUs: 233
+Unique ASINs: 189
+Total units: 1644
+Total inventory value: 17,609.17
+
+
+
+
+---
+
+## 6. Critical Design Decisions & WHY
+
+### Use one PostgreSQL/Supabase database with multiple schemas
+
+Chosen schemas:
+
+text
+reference
+audit
+staging
+atlas_core
+atlas
+keepau
+
+
+Why:
+
+* Less complexity than three physical databases.
+* Easier joins across ASIN, marketplace, inventory, FX, and history.
+* Still gives logical separation.
+
+### Rename atlas_catalog to atlas
+
+Chosen because user prefers simpler naming.
+
+### ASIN is product identity; SKU is listing identity
+
+Why:
+
+* SKUs are marketplace-specific.
+* Multiple SKUs may map to the same ASIN within the same marketplace.
+* ASINs are tracked across five marketplaces.
+
+### Store original price/currency as truth
+
+Why:
+
+* Converted GBP value is derived/cache only.
+* Fixed FX rates are intentionally used for stable business comparison.
+* User does not need daily FX accuracy.
+
+### Use fixed FX rates, not live FX rates
+
+Why:
+
+* User already uses fixed rates in Google Sheets.
+* Rates are updated monthly/quarterly only when materially different.
+* This simplifies cross-market comparison and aligns with existing business logic.
+
+### KeepAU is highest strategic priority
+
+Why:
+
+* Amazon AU lacks Keepa data.
+* Historical Buy Box/BSR collection is most valuable to user.
+* Goal is simplified Keepa-like AU dataset.
+
+### Avoid partitioning at MVP stage
+
+Why:
+
+* Current data volume is tiny.
+* Partitioning adds operational complexity.
+* Add later when history volume justifies it.
+
+---
+
+## 7. Constraints & System Realities
+
+* SP-API Reports API is asynchronous.
+* FATAL is terminal for a report ID.
+* Direct report generation for GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA may fail.
+* Reusing recent DONE reports is more reliable than forcing new reports.
+* Latest snapshot queries must filter by snapshot_id.
+* Absence from a report does not mean marketplace unavailability.
+* VA access should be read-only first.
+* Claude Code is useful for implementation but should not replace deterministic Python logic.
+* No scraping planned for Atlas; data sources are SP-API, Keepa XLSX, Analyzer.tools XLSX, SellerSnap/BQool.
+
+---
+
+## 8. Failure Modes & Handling Strategy
+
+| Failure                                        | Current Handling                                | Needs Improvement                                      |
+| ---------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------ |
+| SP-API report returns FATAL                  | Stops gracefully; does not retry same report ID | Store richer failed run metadata                       |
+| Duplicate source file                          | Skips insert                                    | Add clear SKIPPED_DUPLICATE status                   |
+| Old pre-migration rows have NULL snapshot_id | Excluded from latest snapshot query             | Acceptable                                             |
+| Query aggregates all historical rows           | Fixed                                           | Keep protected with tests                              |
+| Temporary test-ingest exists                 | Should be removed                               | Remove before commit                                   |
+| Missing FX rate                                | Not built yet                                   | Since FX is fixed, validate config/table before ingest |
+| Bad XLSX import                                | Not built yet                                   | Use staging + validation + audit log                   |
+
+---
+
+## 9. Deferred / Not Yet Implemented
+
+| Item                     | Why Deferred                           | Recommended Next Approach                                      |
+| ------------------------ | -------------------------------------- | -------------------------------------------------------------- |
+| Import validation fields | Current ingestion needed to work first | Add expected_rows, inserted_rows, skipped_rows, statuses |
+| Audit schema             | Existing import table is MVP only      | Introduce audit.ingestion_runs                               |
+| Atlas schema             | Need final design locked first         | Create schemas/tables migration-safe                           |
+| KeepAU ingestion         | Needs SP-API feasibility test          | Start with 100–1,000 AU ASIN test batch                        |
+| Google Sheets API        | Lower priority than DB foundation      | Add after core ingestion is stable                             |
+| VA access                | Not needed yet                         | Read-only DB role later                                        |
+| VPS                      | Not needed yet                         | Use only when scheduled jobs matter                            |
+| Parquet/DuckDB           | Useful later for cold history          | Defer until history grows                                      |
+
+---
+
+## 10. Next Logical Steps
+
+1. Remove temporary test-ingest command if still present.
+2. Commit current stable snapshot work.
+3. Add import validation/run metadata to current pipeline.
+4. Create final schema modules:
+
+   * reference
+   * audit
+   * staging
+   * atlas_core
+   * atlas
+   * keepau
+5. Add reference.marketplaces.
+6. Add fixed FX config/table.
+7. Build smallest KeepAU feasibility test:
+
+   * 100–1,000 AU ASINs
+   * Buy Box price
+   * BSR
+   * seller count if available
+8. Only after KeepAU API feasibility is understood, expand scheduled collection.
+
+---
+
+## 11. Safe vs Dangerous Changes
+
+### Safe
+
+* Add new schemas/tables without dropping existing tables.
+* Add read-only queries.
+* Add indexes.
+* Add audit/run metadata.
+* Add fixed FX table/config.
+* Add staging tables.
+* Add marketplace reference table.
+
+### Dangerous
+
+* Removing cache-before-create SP-API logic.
+* Treating FATAL as retryable on same report ID.
+* Aggregating inventory without snapshot_id.
+* Replacing UUID batch snapshot_id with BIGSERIAL.
+* Treating SKU as product identity.
+* Treating missing ASIN from report as unavailable.
+* Giving VA direct write permissions too early.
+* Starting 200k AU ASIN collection before proving SP-API limits/cost.
+
+---
+
+## 12. Minimal Rebuild Instructions
+
+1. Create project:
+
+text
+C:\DevProjects-b\AtlasDB
+
+
+2. Create venv:
+
+powershell
+python -m venv .venv
+.venv\Scripts\activate
+
+
+3. Install requirements:
+
+powershell
+pip install -r requirements.txt
+
+
+4. Add .env:
+
+text
+SPAPI_CLIENT_ID
+SPAPI_CLIENT_SECRET
+SPAPI_REFRESH_TOKEN_EU
+DATABASE_URL
+
+
+5. Ensure .gitignore excludes:
+
+text
+.env
+.venv/
+data/raw/
+data/processed/
+data/logs/
+src/*.txt
+
+
+6. Create/migrate tables:
+
+powershell
+cd C:\DevProjects-b\AtlasDB\src
+python -m db.schema
+
+
+7. Run SP-API ingestion:
+
+powershell
+python main.py ingest-spapi
+
+
+8. Confirm latest snapshot query:
+
+powershell
+python main.py query
+
+
+9. Commit stable state:
+
+powershell
+cd C:\DevProjects-b\AtlasDB
+git status
+git add .
+git commit -m "Add snapshot identity and latest snapshot query"
+git push
+
+
+
+Thought for a couple of seconds
+Locked in. I agree with this as the current Atlas architecture baseline.
+
+Two small refinements I’d make:
+
+Use atlas instead of atlas_catalog — yes, simpler and fine.
+
+Be careful with phrase “AtlasDB”:
+
+Project/system name: AtlasDB
+
+Actual DB schema: not atlasdb, but schemas like atlas, atlas_core, etc.
+
+Best next move:
+
+1. Remove test-ingest if present
+2. Commit stable validated pipeline
+3. Add audit.ingestion_runs
+4. Add reference.marketplaces
+5. Add fixed FX config/table
+6. Then start KeepAU 100–1,000 ASIN feasibility test
+My recommendation: do not design the whole Atlas schema next yet. Add audit + reference first, because they support every future ingestion safely.
+
+
+ok. Let's start working on best moves. let's start with #1 (remove test-ingest if present)
+
+We’ll handle this as a safe cleanup: locate any test-ingest command/reference, remove only that temporary route, then run the normal CLI/help or tests so we don’t accidentally break ingest-spapi or query.
+
+Thought for a few seconds
+Paste this into Claude Code from project root:
+
+Task: Remove temporary test-ingest command if present.
+
+Project: C:\DevProjects-b\AtlasDB
+
+Instructions:
+1. Search the entire repo for:
+   - test-ingest
+   - test_ingest
+   - test ingest
+2. If found, remove only the temporary CLI command/route/helper related to test-ingest.
+3. Do NOT remove:
+   - ingest-spapi
+   - query
+   - SP-API reuse logic
+   - snapshot_id logic
+   - latest snapshot query logic
+4. After removal, run:
+   python main.py --help
+   python main.py query
+5. Show me:
+   - files changed
+   - exact references removed
+   - confirmation that ingest-spapi and query still exist
+   - command outputs
+6. Do not commit yet.
+Then manually run this in PowerShell too:
+
+cd C:\DevProjects-b\AtlasDB\src
+findstr /S /I /N "test-ingest test_ingest" *.py
+python main.py --help
+python main.py query
+Expected result:
+
+findstr finds nothing
+main.py --help still shows ingest-spapi and query
+python main.py query still works
+Mini lesson: this is a low-risk refactor because we’re removing a temporary entry point, not touching the pipeline logic. Treat CLI commands like “doors into the system” — fewer doors means smaller attack surface and less future confusion.
+
+
+
+Powershell-Terminal-Output.txt
+Document
+Yes, Test results are good -see termianl output attached. what's next?
+
+Thought for a couple of seconds
+Good. test-ingest is gone/not present, and the valid commands remain: query and ingest-spapi. Latest snapshot query still works with 233 rows and the correct snapshot ID.
+
+
+Next best move: commit this stable cleanup now.
+
+Run from project root:
+
+cd C:\DevProjects-b\AtlasDB
+git status
+git add .
+git commit -m "Remove temporary test ingest command"
+git push
+After that, move to #3: add import validation/run metadata — specifically audit.ingestion_runs.
+
+Mini lesson: commit after each verified safe step. Think of Git commits like “save points” in a game — small, tested checkpoints make rollback easy and reduce fear when refactoring.
+
+
+git commit is done. what's next?
+
+Thought for a few seconds
+Next: #3 — add import validation/run metadata.
+
+Goal: every ingestion run should leave an audit trail like:
+
+run_id
+source
+report_type
+report_id
+status
+started_at
+finished_at
+source_file
+expected_rows
+parsed_rows
+inserted_rows
+skipped_rows
+error_message
+snapshot_id
+Best next move is not full Atlas schema yet. First add:
+
+audit.ingestion_runs
+Ask Claude Code:
+
+Task: Add audit.ingestion_runs table and basic ingestion run logging.
+
+Project: C:\DevProjects-b\AtlasDB
+
+Goal:
+Create an audit schema/table to track each SP-API ingestion run without changing the working ingestion behaviour.
+
+Requirements:
+1. Add schema:
+   audit
+
+2. Add table:
+   audit.ingestion_runs
+
+Fields:
+- run_id UUID primary key
+- source TEXT not null
+- report_type TEXT
+- report_id TEXT
+- status TEXT not null
+- started_at TIMESTAMPTZ not null default now()
+- finished_at TIMESTAMPTZ
+- source_file TEXT
+- expected_rows INTEGER
+- parsed_rows INTEGER
+- inserted_rows INTEGER
+- skipped_rows INTEGER
+- error_message TEXT
+- snapshot_id UUID
+
+3. Valid statuses for now:
+- STARTED
+- SUCCESS
+- FAILED
+- SKIPPED_DUPLICATE
+
+4. Add helper functions if sensible:
+- start_ingestion_run(...)
+- finish_ingestion_run(...)
+- fail_ingestion_run(...)
+
+5. Wire this only into `ingest-spapi`.
+6. Do not break existing tables:
+- fba_inventory_snapshots
+- fba_inventory_imports
+
+7. Do not remove existing console output.
+8. Run:
+   python -m db.schema
+   python main.py ingest-spapi
+   python main.py query
+
+9. Show:
+- files changed
+- SQL/table created
+- example inserted audit row
+- command outputs
+
+Do not commit yet.
+Mini lesson: audit tables are the “black box recorder” of your pipeline. They don’t make the plane fly, but when something fails, they tell you exactly where and why.
+
+
+
+main.py
+Python
+
+Powershell-Terminal-Output.txt
+Document
+claude code finished (see results attached). what's next?
+
+Thought for a few seconds
+Good progress, but do not commit yet.
+
+Two issues:
+
+Claude Code did not run:
+
+python main.py ingest-spapi
+It only ran schema + query, then inserted a manual test audit row.
+
+
+main.py can produce status PARTIAL, but your planned valid statuses did not include PARTIAL. Either add PARTIAL officially or change that branch. I’d keep PARTIAL — it’s useful.
+
+
+Next run this manually:
+
+cd C:\DevProjects-b\AtlasDB\src
+python main.py ingest-spapi
+python main.py query
+Then check the latest audit rows:
+
+python -c "from db.db_connection import get_connection; conn=get_connection(); cur=conn.cursor(); cur.execute('SELECT run_id, source, report_type, report_id, status, expected_rows, parsed_rows, inserted_rows, skipped_rows, error_message, started_at, finished_at FROM audit.ingestion_runs ORDER BY started_at DESC LIMIT 5'); rows=cur.fetchall(); [print(r) for r in rows]; cur.close(); conn.close()"
+Expected:
+
+ingest-spapi run appears
+status = SUCCESS or SKIPPED_DUPLICATE
+error_message = None
+query still shows latest snapshot correctly
+After that, we can either:
+
+commit, or
+
+patch snapshot_id into audit.ingestion_runs before commit.
+
+My preference: patch snapshot_id before commit because the audit row is much more useful when it points to the exact inventory snapshot.
+
+
+
+Powershell-Terminal-Output.txt
+Document
+Powershell tests went well - see attached. How to patch snapshot_id into audit.ingestion_runs ?
+
+Perfect — this is exactly where the system becomes production-grade.
+
+Right now you have:
+
+✅ snapshot created (d25cedc3-...)
+
+✅ audit row created
+
+❌ no link between them ← this is the gap
+
+🎯 Goal (what we’re fixing)
+We want this:
+
+audit.ingestion_runs.snapshot_id = the snapshot created in this run
+So later you can ask:
+
+→ what exactly happened in run X?
+→ which inventory snapshot came from that run?
+→ which report_id produced that snapshot?
+⚠️ Critical Design Constraint
+Right now your flow is:
+
+insert_fba_inventory_snapshot_rows(...) → returns inserted count only
+So you don’t have access to snapshot_id in Python.
+
+👉 This is the root problem.
+
+✅ Clean Solution (DO THIS)
+Step 1 — Modify repository to return snapshot_id
+Ask Claude Code:
+
+Task: Return snapshot_id from insert_fba_inventory_snapshot_rows
+
+Goal:
+We need the snapshot_id generated during insert so it can be stored in audit.ingestion_runs.
+
+Instructions:
+
+1. Locate:
+   db/inventory_repository.py
+
+2. Modify:
+   insert_fba_inventory_snapshot_rows(...)
+
+3. Current behavior:
+   returns inserted row count (int)
+
+4. Change it to return:
+   (inserted_rows, snapshot_id)
+
+5. Important:
+   - snapshot_id is already being generated inside this function
+   - do NOT change how snapshot_id is generated
+   - just return it
+
+6. Update all callers:
+   - ingest-spapi
+   - ingest-local
+
+Example new usage:
+
+inserted, snapshot_id = insert_fba_inventory_snapshot_rows(...)
+
+7. Do NOT break existing logic
+8. Show:
+   - exact code changes
+   - function before/after
+Step 2 — Pass snapshot_id into audit
+Then update main.py:
+
+inserted, snapshot_id = insert_fba_inventory_snapshot_rows(...)
+And patch:
+
+finish_ingestion_run(
+    run_id=run_id,
+    status=ingest_status,
+    report_id=ingest_report_id,
+    source_file=raw_path,
+    parsed_rows=len(rows),
+    expected_rows=expected,
+    inserted_rows=inserted,
+    skipped_rows=expected - inserted,
+    snapshot_id=snapshot_id,   # ← ADD THIS
+)
+Step 3 — Update audit function
+In:
+
+db/audit_runs.py
+Ensure:
+
+UPDATE audit.ingestion_runs
+SET
+    status = %s,
+    finished_at = now(),
+    snapshot_id = %s,
+    ...
+WHERE run_id = %s
+Step 4 — Test
+Run:
+
+python main.py ingest-spapi
+Then:
+
+SELECT run_id, snapshot_id, status
+FROM audit.ingestion_runs
+ORDER BY started_at DESC
+LIMIT 3;
+Expected:
+
+run_id         snapshot_id                             status
+------         ------------------------------------    -------
+xxxx           d25cedc3-6612-...                      SUCCESS
+💡 Why this matters (important insight)
+Right now your system has two parallel truths:
+
+System	Knows what?
+inventory tables	snapshot_id
+audit table	run_id
+Without linking them:
+
+👉 debugging becomes guesswork
+👉 automation becomes fragile
+👉 traceability breaks
+
+With the link:
+
+run → snapshot → inventory → decisions
+You now have full lineage.
+
+⚠️ Hidden Risk (you avoided it, but worth calling out)
+A weaker approach would be:
+
+SELECT MAX(snapshot_id)
+❌ Dangerous:
+
+race conditions
+
+wrong snapshot if multiple runs
+
+breaks under parallel execution
+
+You’re doing it the correct deterministic way.
+
+🔥 After this step (don’t skip order)
+Once snapshot_id is wired:
+
+👉 THEN commit
+
+Then next move:
+
+#4 reference.marketplaces + FX config
+🧠 Mini Lesson (important)
+Think of your system like this:
+
+SP-API report → ingestion run → snapshot → analysis
+run_id = execution event
+
+snapshot_id = data state
+
+👉 Connecting them = time-travel + auditability
+
+🚀 Optional Thinking Boost
+Blind spot
+You still don’t track:
+
+report_document_id
+That’s useful later for:
+
+debugging SP-API issues
+
+deduplicating downloads
+
+Question
+Do you ever plan to:
+→ reprocess old raw files?
+
+If yes:
+→ snapshot_id becomes even more critical (versioning layer)
+
+When you’ve patched this, send results — I’ll sanity check before commit.
+
+
+I can't really do Step2 - Step 4. Can you give me a claude code prmpt to do it for me?
+
+Use this in Claude Code:
+
+Task: Patch audit.ingestion_runs so each ingestion run stores the created snapshot_id.
+
+Project:
+C:\DevProjects-b\AtlasDB
+
+Context:
+- ingest-spapi now successfully inserts inventory rows and creates an audit.ingestion_runs row.
+- But audit.ingestion_runs.snapshot_id is currently NULL.
+- The insert function likely generates snapshot_id internally but currently returns only inserted row count.
+
+Goal:
+Make the ingestion pipeline return and store snapshot_id deterministically.
+
+Instructions:
+
+1. Read these files first:
+   - src/db/inventory_repository.py
+   - src/db/audit_runs.py
+   - src/main.py
+
+2. In src/db/inventory_repository.py:
+   Locate:
+   insert_fba_inventory_snapshot_rows(...)
+
+   Change its return value from:
+   inserted_rows
+
+   To:
+   inserted_rows, snapshot_id
+
+   Important:
+   - Do NOT change how snapshot_id is generated.
+   - Do NOT generate snapshot_id in main.py.
+   - snapshot_id must remain generated once inside the repository insert function.
+   - Return the exact snapshot_id used for inserted rows.
+
+3. Update all callers in src/main.py:
+   Every place that currently does:
+
+   inserted = insert_fba_inventory_snapshot_rows(...)
+
+   must become:
+
+   inserted, snapshot_id = insert_fba_inventory_snapshot_rows(...)
+
+4. In src/db/audit_runs.py:
+   Update finish_ingestion_run(...) so it accepts optional snapshot_id.
+
+   The function signature should include:
+
+   snapshot_id=None
+
+   And its UPDATE statement should set:
+
+   snapshot_id = %s
+
+   in audit.ingestion_runs.
+
+5. In src/main.py:
+   In the ingest-spapi command, pass snapshot_id into finish_ingestion_run(...):
+
+   snapshot_id=snapshot_id
+
+6. For ingest-local:
+   It does not currently use audit.ingestion_runs.
+   Still update it so the tuple return does not break the command.
+
+7. Check for all remaining usages of:
+   insert_fba_inventory_snapshot_rows
+
+   Ensure none expect only one return value.
+
+8. Run:
+
+   python main.py query
+   python main.py ingest-spapi
+   python main.py query
+
+9. Then run this audit check:
+
+   python -c "from db.db_connection import get_connection; conn=get_connection(); cur=conn.cursor(); cur.execute('SELECT run_id, report_id, status, snapshot_id, expected_rows, inserted_rows, skipped_rows, started_at, finished_at FROM audit.ingestion_runs ORDER BY started_at DESC LIMIT 5'); rows=cur.fetchall(); [print(r) for r in rows]; cur.close(); conn.close()"
+
+Expected result:
+- Latest audit row status is SUCCESS or SKIPPED_DUPLICATE.
+- Latest audit row has non-NULL snapshot_id.
+- snapshot_id matches the latest snapshot shown by python main.py query.
+- Existing query output still works.
+
+Safety rules:
+- Do NOT change SP-API report reuse logic.
+- Do NOT change snapshot_id generation method.
+- Do NOT drop or recreate existing tables.
+- Do NOT remove existing console output.
+- Do NOT commit.
+
+Show me:
+- files changed
+- exact before/after of return value
+- command outputs
+- latest audit rows
+After Claude Code finishes, send me the terminal output before committing.
+
+
+
+Powershell-Terminal-Output.txt
+Document
+Pls see terminal output attached.
+
+Thought for a couple of seconds
+Excellent. This is now validated.
+
+Latest audit row has:
+
+status = SUCCESS
+snapshot_id = 9c556db8-2597-4c96-ab10-1331f15f8271
+expected = 233
+inserted = 233
+skipped = 0
+And it matches the latest main.py query snapshot.
+
+
+Next: commit this stable audit milestone.
+
+cd C:\DevProjects-b\AtlasDB
+git status
+git add .
+git commit -m "Add audit ingestion run tracking with snapshot lineage"
+git push
+After commit, next best move is:
+
+#4 Add reference.marketplaces
+Mini lesson: you now have lineage:
+
+report_id → run_id → snapshot_id → inventory rows
+That’s the foundation for safe debugging and future automation.
+
+
+Great. Let's proceed.
+
+Thought for a few seconds
+Next: #4 Add reference.marketplaces.
+
+Use this in Claude Code:
+
+Task: Add reference.marketplaces table.
+
+Project:
+C:\DevProjects-b\AtlasDB
+
+Goal:
+Create a stable reference table for Amazon marketplaces so future ingestion can avoid hardcoded marketplace metadata.
+
+Instructions:
+
+1. Read first:
+   - src/db/schema.py
+   - src/reports/report_requests.py
+   - src/main.py
+
+2. Add schema:
+   reference
+
+3. Add table:
+   reference.marketplaces
+
+Fields:
+- marketplace_id TEXT PRIMARY KEY
+- marketplace_code TEXT NOT NULL
+- region TEXT NOT NULL
+- country_code TEXT NOT NULL
+- currency_code TEXT NOT NULL
+- marketplace_name TEXT NOT NULL
+- is_active BOOLEAN NOT NULL DEFAULT true
+- created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+
+4. Seed at least the currently validated UK marketplace:
+
+marketplace_id: A1F83G8C2ARO7P
+marketplace_code: UK
+region: EU
+country_code: GB
+currency_code: GBP
+marketplace_name: Amazon UK
+is_active: true
+
+5. Use INSERT ... ON CONFLICT DO UPDATE or DO NOTHING so migrations are safe to rerun.
+
+6. Do not remove existing constants yet:
+   - EU_UK_MARKETPLACE_ID
+   - REPORT_TYPE
+
+7. Run:
+   python -m db.schema
+
+8. Then verify:
+
+   python -c "from db.db_connection import get_connection; conn=get_connection(); cur=conn.cursor(); cur.execute('SELECT marketplace_id, marketplace_code, region, country_code, currency_code, marketplace_name, is_active FROM reference.marketplaces ORDER BY marketplace_code'); rows=cur.fetchall(); [print(r) for r in rows]; cur.close(); conn.close()"
+
+9. Run:
+   python main.py query
+
+Safety rules:
+- Do NOT change SP-API ingestion logic.
+- Do NOT change audit logic.
+- Do NOT drop/recreate existing tables.
+- Do NOT commit.
+
+Show:
+- files changed
+- SQL added
+- seeded marketplace row
+- command outputs
+Expected result:
+
+('A1F83G8C2ARO7P', 'UK', 'EU', 'GB', 'GBP', 'Amazon UK', True)
+After this passes, commit it separately.
+
+Mini lesson: reference.marketplaces is like your system’s postcode/address book. Instead of every module “remembering” what UK means, the database becomes the source of truth.
+
+
+
+Powershell-Terminal-Output.txt
+Document
+I think we are good. see attached.
+shall I commit? What to do you mean "separately", commit separately?
+
+Yes — you should commit now, and yes, “separately” means exactly this: one clean commit per logical change.
+
+✅ Why this is a good commit point
+You now have:
+
+✅ Audit system with full lineage (run_id → snapshot_id)
+
+✅ Reference table for marketplaces
+
+✅ No breaking changes to ingestion
+
+✅ Verified outputs still correct
+
+
+This is a complete, stable unit of functionality.
+
+🧠 What “commit separately” really means
+Instead of doing this (bad):
+
+"added audit + marketplaces + fx + keepau + refactor"
+You do this (correct):
+
+1 commit = 1 concept
+Your commits so far (ideal structure)
+1. Remove temporary test command
+2. Add audit ingestion tracking
+3. Add snapshot_id lineage to audit
+4. Add reference.marketplaces   ← YOU ARE HERE
+👉 Each one:
+
+is testable
+
+is reversible
+
+has clear purpose
+
+✅ Commit now
+cd C:\DevProjects-b\AtlasDB
+git add .
+git commit -m "Add reference.marketplaces table with UK seed"
+git push
+⚠️ One small improvement (optional but smart)
+Right now your seed uses:
+
+ON CONFLICT DO UPDATE
+That’s fine.
+
+But long-term, consider:
+
+ON CONFLICT DO NOTHING
+Why?
+
+You don’t want accidental overwrites later
+
+Reference tables should be stable, not mutable by migrations
+
+Not urgent — just flagging the future direction.
+
+🚀 Next Move (high ROI)
+#5 Add FX reference (VERY important for your business logic)
+Because:
+
+You already said:
+
+fixed FX rates, updated monthly/quarterly
+
+So we’ll build:
+
+reference.fx_rates
+This unlocks:
+
+cross-market arbitrage queries
+
+consistent pricing comparisons
+
+no dependency on external APIs
+
+🧠 Mini Lesson (important)
+You just moved from:
+
+script-based pipeline
+→ to:
+
+system with:
+- auditability
+- reference data
+- reproducibility
+That’s the shift from:
+👉 “code that works”
+to
+👉 “system you can trust at scale”
+
+🔍 Small Blind Spot (worth thinking)
+Right now:
+
+marketplace_id is stored in:
+- code (constants)
+- database (reference.marketplaces)
+Later:
+
+👉 You should remove hardcoding and load from DB
+
+But NOT yet — good that you didn’t do it early.
+
+👍 Summary
+Yes → commit now
+
+Yes → “separately” = clean, single-purpose commits
+
+Next → FX table (high leverage for your business)
+
+When you're ready, say:
+
+next
+and we’ll design FX properly (this one matters more than it looks).
+
+
+Let's change: ON CONFLICT DO NOTHING.
+also, let's do FX rates too.
+
+I’ll bundle this as one small reference-data patch: make marketplace seeding non-overwriting, then add fixed FX rates in the same reference schema. This is safe because it touches only schema/seed data, not ingestion logic.
+
+Thought for a few seconds
+Yes. Use this in Claude Code:
+
+Task: Update marketplace seed conflict handling and add fixed FX rates reference table.
+
+Project:
+C:\DevProjects-b\AtlasDB
+
+Goal:
+1. Change reference.marketplaces seed from ON CONFLICT DO UPDATE to ON CONFLICT DO NOTHING.
+2. Add reference.fx_rates for fixed business comparison FX rates.
+
+Context:
+- User intentionally uses fixed FX rates, not live FX.
+- These rates are for stable business comparison only, not accounting truth.
+- Do not connect to any external FX API.
+
+Instructions:
+
+1. Read first:
+   - src/db/schema.py
+
+2. In SEED_REFERENCE_MARKETPLACES:
+   Change:
+
+   ON CONFLICT (marketplace_id) DO UPDATE SET ...
+
+   To:
+
+   ON CONFLICT (marketplace_id) DO NOTHING;
+
+3. Add table:
+
+   reference.fx_rates
+
+Fields:
+- base_currency TEXT NOT NULL
+- target_currency TEXT NOT NULL
+- rate NUMERIC(18, 8) NOT NULL
+- rate_type TEXT NOT NULL DEFAULT 'FIXED_BUSINESS_COMPARISON'
+- effective_from DATE NOT NULL
+- source_note TEXT
+- is_active BOOLEAN NOT NULL DEFAULT true
+- created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+- PRIMARY KEY (base_currency, target_currency, effective_from)
+
+4. Add CHECK constraints:
+- rate > 0
+- base_currency <> target_currency
+
+5. Seed placeholder fixed rates ONLY if safe.
+Use conservative example values if needed, but mark source_note clearly as:
+
+'Placeholder fixed business comparison rate - replace with user approved rate'
+
+Seed:
+- USD → GBP
+- EUR → GBP
+- CAD → GBP
+- AUD → GBP
+
+Important:
+- Do NOT claim these are live or accurate FX rates.
+- These are placeholders only.
+
+6. Use ON CONFLICT DO NOTHING for FX seed too.
+
+7. Wire into both:
+   - create_tables()
+   - run_migrations()
+
+8. Run:
+
+   python -m db.schema
+
+9. Verify:
+
+   python -c "from db.db_connection import get_connection; conn=get_connection(); cur=conn.cursor(); cur.execute('SELECT marketplace_id, marketplace_code, region, country_code, currency_code, marketplace_name, is_active FROM reference.marketplaces ORDER BY marketplace_code'); print('marketplaces:'); [print(r) for r in cur.fetchall()]; cur.execute('SELECT base_currency, target_currency, rate, rate_type, effective_from, source_note, is_active FROM reference.fx_rates ORDER BY base_currency, target_currency, effective_from'); print('fx_rates:'); [print(r) for r in cur.fetchall()]; cur.close(); conn.close()"
+
+10. Run:
+
+   python main.py query
+
+Safety rules:
+- Do NOT change ingestion logic.
+- Do NOT change audit logic.
+- Do NOT use live FX APIs.
+- Do NOT drop/recreate existing tables.
+- Do NOT commit.
+
+Show:
+- files changed
+- exact SQL added/changed
+- seeded rows
+- command outputs
+One thing to watch: because the previous marketplace seed already ran with DO UPDATE, changing to DO NOTHING only affects future runs. That’s fine. The current UK row is already correct.
+
+
+
+
+Powershell-Terminal-Output.txt
+Document
+I think we are good. See attached.
+What's next? Commit? and then?
+
+Yes — this is a clean commit point.
+
+Everything is correct and validated:
+
+Marketplace seed updated safely (DO NOTHING)
+
+FX table added with constraints
+
+Placeholder FX seeded correctly
+
+No ingestion impact
+
+Query still stable
+
+
+✅ Commit now
+cd C:\DevProjects-b\AtlasDB
+git add .
+git commit -m "Add reference.fx_rates and make marketplaces seed immutable"
+git push
+🚀 What’s next (important fork — don’t rush)
+Now you’ve finished core foundation layer:
+
+✔ ingestion
+✔ audit
+✔ reference data
+Next step is NOT more schema.
+
+⚠️ Critical decision point
+You now have two possible directions:
+
+Option A — Atlas schema (big system build)
+Build:
+
+products
+
+marketplaces
+
+metrics tables
+
+cross-market queries
+
+👉 High complexity
+👉 No immediate ROI
+👉 Easy to overbuild
+
+Option B — KeepAU (high ROI, focused)
+Start collecting:
+
+AU marketplace:
+- Buy Box price
+- BSR
+- seller count (if possible)
+👉 Immediate business value
+👉 Builds your own "mini Keepa"
+👉 Validates SP-API limits
+👉 Low complexity MVP
+
+🧠 My recommendation (strong push)
+👉 Go with KeepAU next
+
+Reason:
+
+You already said:
+
+AU has no Keepa → highest value gap
+
+And from architecture perspective:
+
+KeepAU = smallest system that proves everything works at scale
+🎯 Next Task (use Claude Code)
+If you agree, I’ll give you the exact prompt.
+
+But first quick check:
+
+👉 Do you want:
+A) KeepAU MVP
+B) Continue Atlas schema
+C) Something else (e.g. FX usage in queries)
+
+🧠 Mini lesson (important shift)
+Right now you moved from:
+
+"building system"
+to:
+
+"choosing where value comes from"
+That decision matters more than any code.
+
+🔍 One small blind spot
+Your FX rates are currently:
+
+effective_from = 2026-04-26
+Later you’ll want:
+
+→ versioned FX
+→ historical comparison consistency
+You already set the foundation correctly 👍
+
+👍 Summary
+Yes → commit now
+
+You’re at a strategic fork
