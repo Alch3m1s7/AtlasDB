@@ -7,10 +7,11 @@ __pycache__/
 # Secrets
 .env
 
-# Data — raw API responses, processed outputs, logs (large/ephemeral, not committed)
+# Data — raw API responses, processed outputs, logs, state (large/ephemeral, not committed)
 data/raw/
 data/processed/
 data/logs/
+data/state/
 
 # UI-downloaded reports (Keepa, Bqool) — never commit source files
 data/ui_downloads/

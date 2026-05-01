@@ -60,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
         "command",
-        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "import-ui-report", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
+        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "import-ui-report", "keepa-manual-assist", "probe-keepa-api", "update-keepa-sheets", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
         help="Command to run",
     )
     parser.add_argument(
@@ -92,6 +92,44 @@ def main():
         default=None,
         metavar="PATH",
         help="Path to the downloaded XLSX or CSV file (import-ui-report only)",
+    )
+    parser.add_argument(
+        "--no-import",
+        action="store_true",
+        default=False,
+        help="keepa-manual-assist: find the downloaded file but skip the import step",
+    )
+    parser.add_argument(
+        "--downloads-dir",
+        default=None,
+        metavar="PATH",
+        help="keepa-manual-assist: additional directory to search for the downloaded XLSX",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["cheap", "buybox", "history", "all", "field-probe"],
+        default="cheap",
+        help="probe-keepa-api: query mode (default: cheap)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=40,
+        metavar="N",
+        help="probe-keepa-api: max ASINs to read from the spreadsheet (default: 40)",
+    )
+    parser.add_argument(
+        "--max-asins",
+        type=int,
+        default=20,
+        metavar="N",
+        help="update-keepa-sheets: max ASINs to process per run (default: 20)",
+    )
+    parser.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        default=False,
+        help="update-keepa-sheets: ignore saved checkpoint and start from row 8",
     )
     args = parser.parse_args()
 
@@ -561,6 +599,106 @@ def main():
         if result.get("error"):
             print(f"  error          : {result['error']}")
         if status not in ("SUCCESS", "DRY_RUN"):
+            sys.exit(1)
+
+    elif args.command == "keepa-manual-assist":
+        from ui_downloaders.keepa_manual_assist import run_manual_assist
+
+        marketplace_code = args.marketplace
+        dry_run = args.dry_run
+        no_import = args.no_import
+        downloads_dir = args.downloads_dir
+
+        print(f"\n{'=' * 60}")
+        print(
+            f"keepa-manual-assist  marketplace={marketplace_code}  "
+            f"dry_run={dry_run}  no_import={no_import}"
+        )
+        print(f"{'=' * 60}")
+        try:
+            result = run_manual_assist(
+                marketplace=marketplace_code,
+                dry_run=dry_run,
+                no_import=no_import,
+                downloads_dir=downloads_dir,
+            )
+        except Exception as exc:
+            print(f"  ERROR: {exc}")
+            sys.exit(1)
+
+        status = result.get("status", "?")
+        print(f"\n  status  : {status}")
+        if result.get("file_path"):
+            print(f"  file    : {result['file_path']}")
+        if result.get("import_result", {}) and result["import_result"].get("error"):
+            print(f"  import error: {result['import_result']['error']}")
+        if status not in ("SUCCESS", "DRY_RUN", "DOWNLOAD_ONLY", "IMPORT_SKIPPED", "NO_FILE"):
+            sys.exit(1)
+
+    elif args.command == "probe-keepa-api":
+        from probes.keepa_api_probe import run_probe
+
+        marketplace_code = args.marketplace
+        mode = args.mode
+        limit = args.limit
+
+        print(f"\n{'=' * 60}")
+        print(
+            f"probe-keepa-api  marketplace={marketplace_code}  "
+            f"mode={mode}  limit={limit}"
+        )
+        print(f"{'=' * 60}")
+        try:
+            result = run_probe(
+                marketplace=marketplace_code,
+                mode=mode,
+                limit=limit,
+            )
+        except RuntimeError as exc:
+            # RuntimeError covers missing API key and Keepa init failures
+            print(f"  ERROR: {exc}")
+            sys.exit(1)
+        except Exception as exc:
+            print(f"  UNHANDLED ERROR: {exc}")
+            sys.exit(1)
+
+        any_error = any(
+            r.get("status") != "SUCCESS" for r in result.get("mode_results", [])
+        )
+        if any_error:
+            sys.exit(1)
+
+    elif args.command == "update-keepa-sheets":
+        from keepa_sheets.sheet_updater import run_sheet_update
+
+        marketplace_code = args.marketplace
+        max_asins = args.max_asins
+        dry_run = args.dry_run
+        reset_cp = args.reset_checkpoint
+
+        print(f"\n{'=' * 60}")
+        print(
+            f"update-keepa-sheets  marketplace={marketplace_code}  "
+            f"max_asins={max_asins}  "
+            f"{'DRY-RUN' if dry_run else 'LIVE'}"
+        )
+        print(f"{'=' * 60}")
+        try:
+            result = run_sheet_update(
+                marketplace=marketplace_code,
+                max_asins=max_asins,
+                dry_run=dry_run,
+                reset_checkpoint=reset_cp,
+            )
+        except (RuntimeError, ValueError, ImportError) as exc:
+            print(f"\n  ERROR: {exc}")
+            sys.exit(1)
+        except Exception as exc:
+            print(f"\n  UNHANDLED ERROR: {exc}")
+            sys.exit(1)
+
+        status = result.get("status", "?")
+        if status not in ("SUCCESS", "DRY_RUN", "NOTHING_TO_DO"):
             sys.exit(1)
 
     elif args.command == "probe-keepau-catalog":
