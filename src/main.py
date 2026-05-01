@@ -60,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
         "command",
-        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
+        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "import-ui-report", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
         help="Command to run",
     )
     parser.add_argument(
@@ -80,6 +80,18 @@ def main():
         action="store_true",
         default=False,
         help="Print export plan without authenticating or writing to Sheets",
+    )
+    parser.add_argument(
+        "--source",
+        choices=["keepa", "bqool"],
+        default=None,
+        help="UI report source type (import-ui-report only)",
+    )
+    parser.add_argument(
+        "--file",
+        default=None,
+        metavar="PATH",
+        help="Path to the downloaded XLSX or CSV file (import-ui-report only)",
     )
     args = parser.parse_args()
 
@@ -515,6 +527,41 @@ def main():
                 )
                 if r.get("error"):
                     print(f"    error: {r['error']}")
+
+    elif args.command == "import-ui-report":
+        from imports.ui_report_importer import import_ui_report
+
+        if not args.source:
+            parser.error("--source is required for import-ui-report (keepa or bqool)")
+        if not args.file:
+            parser.error("--file is required for import-ui-report")
+
+        marketplace_code = args.marketplace
+        dry_run = args.dry_run
+
+        print(f"\n{'=' * 60}")
+        print(
+            f"import-ui-report  source={args.source}  marketplace={marketplace_code}"
+            f"  dry_run={dry_run}"
+        )
+        print(f"{'=' * 60}")
+        try:
+            result = import_ui_report(
+                source=args.source,
+                marketplace=marketplace_code,
+                file_path=args.file,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            print(f"  ERROR: {exc}")
+            sys.exit(1)
+
+        status = result.get("status", "?")
+        print(f"  status         : {status}")
+        if result.get("error"):
+            print(f"  error          : {result['error']}")
+        if status not in ("SUCCESS", "DRY_RUN"):
+            sys.exit(1)
 
     elif args.command == "probe-keepau-catalog":
         import json

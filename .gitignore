@@ -12,6 +12,12 @@ data/raw/
 data/processed/
 data/logs/
 
+# UI-downloaded reports (Keepa, Bqool) — never commit source files
+data/ui_downloads/
+
+# Playwright browser profile (future automation) — never commit sessions/cookies
+data/browser_profiles/
+
 # Claude Code local settings
 .claude/
 src/.claude/
