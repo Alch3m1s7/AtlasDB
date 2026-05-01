@@ -1,26 +1,37 @@
 # Keepa Sheet Updater
 
-## Scope — CA MVP only
+## Supported marketplaces
 
-This is the first-pass rolling updater. Only the CA marketplace (`KeepaCA` tab) is
-wired up. US, UK, and DE can be added later by extending `_SHEET_CONFIG` in
-`src/keepa/sheet_updater.py`.
+| Marketplace | Sheet tab | Keepa domain | Spreadsheet ID |
+|---|---|---|---|
+| US | KeepaUS | US | 1gzJUJe-FlC1W4VBB7HpvNPiSrMQwAY0gX3d4Z32Qkeo |
+| CA | KeepaCA | CA | 1Ber9_AllcA5NJ2iqT-0KPudWx5MG2DYvi3i4Jtw1su8 |
+| UK | KeepaUK | GB | 1OTWzsdPvICJv7h_nYFYsFshueKkyRgduIqLw29oRErM |
+| DE | KeepaDE | DE | 1pXbUdAUy6k4tf_dEtC8DUGnFcjqNlvg0xjdu8Humdqk |
+
+Note: Keepa uses domain code `'GB'` for the UK marketplace. The `keepa_domain`
+field in `_SHEET_CONFIG` handles this translation; the CLI always uses `--marketplace UK`.
 
 ---
 
 ## Commands
 
 ```powershell
-# Dry-run — queries Keepa, shows planned writes, does NOT write to Sheets
+# Dry-run (no Sheets writes) — safe for all marketplaces
+python src/main.py update-keepa-sheets --marketplace US --max-asins 10 --dry-run
 python src/main.py update-keepa-sheets --marketplace CA --max-asins 10 --dry-run
+python src/main.py update-keepa-sheets --marketplace UK --max-asins 10 --dry-run
+python src/main.py update-keepa-sheets --marketplace DE --max-asins 10 --dry-run
 
-# First real write — safe starting point (5 ASINs from checkpoint position)
-python src/main.py update-keepa-sheets --marketplace CA --max-asins 5
+# First live write for a new marketplace — 3 ASINs is a safe starting point
+python src/main.py update-keepa-sheets --marketplace US --max-asins 3
+python src/main.py update-keepa-sheets --marketplace UK --max-asins 3
+python src/main.py update-keepa-sheets --marketplace DE --max-asins 3
 
-# Larger batch
+# Normal operating batch
 python src/main.py update-keepa-sheets --marketplace CA --max-asins 20
 
-# Restart from first ASIN (ignores checkpoint)
+# Restart from first ASIN (ignores checkpoint for that marketplace only)
 python src/main.py update-keepa-sheets --marketplace CA --max-asins 20 --reset-checkpoint
 ```
 
@@ -30,15 +41,17 @@ python src/main.py update-keepa-sheets --marketplace CA --max-asins 20 --reset-c
 
 ## Field mapping
 
+Same column layout for all KeepaXX tabs.
+
 | Sheet column | Field | Keepa source |
 |---|---|---|
-| Q | Locale | Derived from marketplace config (`CA`) |
+| Q | Locale | Derived from config (`com` / `ca` / `co.uk` / `de`) |
 | R | Title | `product.title` |
 | Z | Amazon availability | `product.availabilityAmazon` (label, e.g. `out_of_stock`) |
 | AB | Pick and Pack / FBA fee | `product.fbaFees.pickAndPackFee` ÷ 100 |
 | AG | Current Buy Box | `stats.current[18]` ÷ 100 (BUY_BOX_SHIPPING) |
 | AI | 90-day Buy Box average | `stats.avg90[18]` ÷ 100 |
-| AM | Buy Box Seller | `product.buyBoxSellerIdHistory` latest string entry |
+| AM | Buy Box Seller | `product.buyBoxSellerIdHistory` latest entry (conditional) |
 | AP | Category | `product.categoryTree[0].name` (root) |
 | AQ | Subcategory | `product.categoryTree[-1].name` (deepest) |
 | AS | EAN | `product.eanList[0]` |
@@ -53,27 +66,23 @@ python src/main.py update-keepa-sheets --marketplace CA --max-asins 20 --reset-c
 
 ---
 
-## Token maths
+## Token budget
 
-| Scenario | Tokens/run |
+| Batch size | Tokens per run |
 |---|---|
-| `--max-asins 5` | 15 tokens |
-| `--max-asins 20` | 60 tokens |
-| `--max-asins 100` | 300 tokens |
+| 3 ASINs | 9 tokens |
+| 10 ASINs | 30 tokens |
+| 20 ASINs | 60 tokens |
+| 100 ASINs | 300 tokens |
 
 Refill rate: 5 tokens/min = 300 tokens/hour.
 
-To update 629 CA ASINs in one full cycle: 629 × 3 = 1,887 tokens ≈ 6.3 hours at
-300 tokens/hour. Run with `--max-asins 20` every 12 minutes to drain at full
-refill rate (300/20=15 runs/hour), or run `--max-asins 100` once per 20 minutes.
+Running all 4 marketplaces in sequence at `--max-asins 20` costs 240 tokens
+(~48 minutes of refill). Plan accordingly when rotating through marketplaces.
 
 **Token check rule**: if `tokens_available < batch_size × 3`, the batch is
-reduced to `tokens_available ÷ 3`. If no tokens remain for even one ASIN, the
-run raises a `RuntimeError` with a wait-and-retry message.
-
-The command will never wait more than a few seconds for token refill. It does
-not loop indefinitely. For scheduled operation, run the command on a cron schedule
-that matches the refill rate.
+trimmed to `tokens_available ÷ 3`. If fewer than 3 tokens remain, the run
+raises a `RuntimeError` with a wait-and-retry message.
 
 ---
 
@@ -81,27 +90,47 @@ that matches the refill rate.
 
 Checkpoint file: `data/state/keepa_rolling_checkpoint.json`
 
+Checkpoints are stored per marketplace so runs for different markets are
+completely independent:
+
 ```json
 {
-  "marketplace": "CA",
-  "next_row_number": 28,
-  "last_processed_asin": "B00BUXVV9A",
-  "last_success_at": "2026-05-01 18:30:00",
-  "total_processed_in_last_run": 20,
-  "tokens_before": 300,
-  "tokens_after": 240,
-  "tokens_consumed": 60
+  "CA": {
+    "next_row_number": 28,
+    "last_processed_asin": "B00BUXVV9A",
+    "last_success_at": "2026-05-01 18:30:00",
+    "total_processed_in_last_run": 20,
+    "tokens_before": 300,
+    "tokens_after": 240,
+    "tokens_consumed": 60
+  },
+  "US": {
+    "next_row_number": 11,
+    "last_processed_asin": "B07XYZ1234",
+    "last_success_at": "2026-05-01 19:00:00",
+    ...
+  }
 }
 ```
 
-- The checkpoint is only saved after a successful Sheets `batchUpdate` write.
-- `next_row_number` is the sheet row number (e.g. 28 = row after the last
-  processed ASIN in a batch ending at row 27).
+- Checkpoint is only saved after a successful Sheets `batchUpdate` write.
+- `next_row_number` is the sheet row number after the last processed batch.
 - If the checkpoint row is past the last ASIN in the list, the updater wraps
   back to row 8 automatically.
-- `--reset-checkpoint` ignores the saved checkpoint entirely and starts from
-  row 8. This does not delete the file; it is overwritten on the next
-  successful write.
+- `--reset-checkpoint` ignores the saved checkpoint for that marketplace only.
+  Other marketplaces are not affected.
+- **Migration**: if an old single-marketplace checkpoint exists
+  (`{"marketplace": "CA", "next_row_number": ...}`), it is silently migrated
+  to the new per-marketplace format on first read.
+
+---
+
+## Recommended live test sequence for new marketplaces
+
+1. Dry-run first: `--max-asins 10 --dry-run` — verify ASIN list, token cost,
+   planned writes.
+2. First live write: `--max-asins 3` — inspect the 3 rows in the sheet manually.
+3. If correct: `--max-asins 20` for a normal batch.
 
 ---
 
@@ -127,14 +156,11 @@ Checkpoint file: `data/state/keepa_rolling_checkpoint.json`
 ## Why BD (Monthly Sales Trends) is excluded
 
 `product.monthlySold` is not returned by the Keepa Product API in the
-`buybox=True, history=False, stats=90` query mode. This was confirmed by the
-field-probe: the key is absent from the product dict for all 10 tested ASINs.
-Obtaining monthly sales data from Keepa would require a different API tier or
-query parameters not investigated in the probe.
+`buybox=True, history=False, stats=90` query mode. Confirmed by the field-probe:
+the key is absent from the product dict for all ASINs tested.
 
-If this field is needed in the future, it should be sourced from:
-- Keepa's product finder / sales rank history endpoint (separate probe needed), or
-- A third-party sales estimator API.
+If needed in the future, source it from Keepa's product finder / sales rank
+history endpoint (requires a separate probe) or a third-party estimator API.
 
 ---
 
@@ -145,8 +171,7 @@ entered or that was populated by a prior import (e.g. a Bqool report). This is
 a non-reversible data loss without a change log.
 
 The rule is: if Keepa does not return a value, the corresponding sheet cell is
-unchanged. The log records how many cells were skipped per ASIN so the operator
-can see what was not updated.
+unchanged. The log records how many cells were skipped per ASIN.
 
 ---
 
@@ -155,9 +180,9 @@ can see what was not updated.
 AB (Pick and Pack / FBA fee) is populated from `product.fbaFees.pickAndPackFee`,
 which is Keepa's cached fee value. This may lag Amazon's current fee schedule.
 
-For an authoritative FBA fee, use the SP-API `getMyFeesEstimate` endpoint. The
-existing `probe-marketplace-pricing-fees` command covers this. The Keepa value
-is a useful quick fill but should not be treated as billing-accurate.
+For an authoritative FBA fee, use the SP-API `getMyFeesEstimate` endpoint.
+The existing `probe-marketplace-pricing-fees` command covers this. The Keepa
+value is a useful quick fill but should not be treated as billing-accurate.
 
 ---
 
@@ -168,35 +193,6 @@ Each run writes a timestamped log to:
 data/logs/keepa_sheet_update_YYYYMMDD_HHMMSS.log
 ```
 
-The log records:
-- Marketplace, mode, max_asins
-- Token balance before/after/consumed
-- Each ASIN processed: row number, columns written, columns skipped (blank)
-- Any ASIN-level skips (empty Keepa response, ASIN mismatch)
-- Checkpoint row saved
-- Final cell count summary
-
----
-
-## Extending to US / UK / DE
-
-Add an entry to `_SHEET_CONFIG` in `src/keepa/sheet_updater.py`:
-
-```python
-"US": {
-    "spreadsheet_id": "<US sheet ID>",
-    "tab": "KeepaUS",
-    "asin_col": "AR",
-    "first_data_row": 8,
-    "locale": "US",
-},
-```
-
-Then run:
-```powershell
-python src/main.py update-keepa-sheets --marketplace US --max-asins 10 --dry-run
-```
-
-The checkpoint file stores one marketplace at a time. If you want to checkpoint
-multiple marketplaces independently, the checkpoint schema will need a per-market
-map (not yet needed for the CA-only MVP).
+The log records: marketplace, mode, max_asins; token balance before/after/consumed;
+each ASIN processed (row number, columns written, columns skipped); any ASIN-level
+skips; checkpoint row saved; final cell count summary.

@@ -1,18 +1,24 @@
 """
-Keepa rolling sheet updater — CA MVP.
+Keepa rolling sheet updater — US / CA / UK / DE.
 
-Reads ASINs from the source column (AR) in the KeepaCA sheet tab, queries the
-Keepa Product API in batches, and writes the returned product/pricing fields
-back to the same sheet row.
+Reads ASINs from the ASIN source column (AR) in the marketplace's KeepaXX tab,
+queries the Keepa Product API in batches, and writes the returned product/pricing
+fields back to the same sheet row.
 
 Query mode: buybox=True, stats=90, history=False (~3 tokens/ASIN).
+
+Supported marketplaces and Keepa domains:
+  US → Keepa domain 'US'
+  CA → Keepa domain 'CA'
+  UK → Keepa domain 'GB'
+  DE → Keepa domain 'DE'
 
 Safety guarantees:
   - Dry-run queries Keepa but never writes to Google Sheets.
   - Blank/null values are never written (preserves existing cell data).
   - buybox_seller_id and upc are only written when Keepa returns a value.
   - No range clears; only targeted cell writes via batchUpdate.
-  - Checkpoint file persists progress between runs.
+  - Checkpoint file stores progress per marketplace independently.
   - API key is never printed or saved to output files.
 
 BD (Monthly Sales Trends) is excluded: product.monthlySold is not returned
@@ -39,12 +45,37 @@ _CHECKPOINT_FILE = os.path.join(_STATE_DIR, "keepa_rolling_checkpoint.json")
 _BUY_BOX_IDX = 18  # Keepa csv_indices index for BUY_BOX_SHIPPING
 
 _SHEET_CONFIG: dict[str, dict] = {
+    "US": {
+        "spreadsheet_id": "1gzJUJe-FlC1W4VBB7HpvNPiSrMQwAY0gX3d4Z32Qkeo",
+        "tab": "KeepaUS",
+        "asin_col": "AR",
+        "first_data_row": 8,
+        "sheet_locale": "com",   # value written to column Q
+        "keepa_domain": "US",
+    },
     "CA": {
         "spreadsheet_id": "1Ber9_AllcA5NJ2iqT-0KPudWx5MG2DYvi3i4Jtw1su8",
         "tab": "KeepaCA",
         "asin_col": "AR",
         "first_data_row": 8,
-        "locale": "CA",
+        "sheet_locale": "ca",    # value written to column Q
+        "keepa_domain": "CA",
+    },
+    "UK": {
+        "spreadsheet_id": "1OTWzsdPvICJv7h_nYFYsFshueKkyRgduIqLw29oRErM",
+        "tab": "KeepaUK",
+        "asin_col": "AR",
+        "first_data_row": 8,
+        "sheet_locale": "co.uk", # value written to column Q
+        "keepa_domain": "GB",    # Keepa uses 'GB' for the UK marketplace
+    },
+    "DE": {
+        "spreadsheet_id": "1pXbUdAUy6k4tf_dEtC8DUGnFcjqNlvg0xjdu8Humdqk",
+        "tab": "KeepaDE",
+        "asin_col": "AR",
+        "first_data_row": 8,
+        "sheet_locale": "de",    # value written to column Q
+        "keepa_domain": "DE",
     },
 }
 
@@ -85,15 +116,46 @@ _AVAIL_LABELS: dict[int, str] = {
 
 
 # ── Checkpoint ────────────────────────────────────────────────────────────────
+#
+# Checkpoint file format (multi-marketplace):
+#   { "CA": { "next_row_number": 18, "last_processed_asin": "B00...", ... },
+#     "US": { ... }, ... }
+#
+# Old single-marketplace format ({"marketplace": "CA", "next_row_number": ...})
+# is detected and silently migrated on first read.
 
-def load_checkpoint(marketplace: str) -> dict | None:
-    """Return the saved checkpoint for marketplace, or None if absent/invalid."""
+
+def _read_all_checkpoints() -> dict:
+    """Read the checkpoint file and return the full multi-marketplace dict.
+
+    Migrates old single-marketplace format to the new format automatically.
+    Returns {} if the file is absent or unreadable.
+    """
     try:
         with open(_CHECKPOINT_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        return data if data.get("marketplace") == marketplace else None
     except (FileNotFoundError, json.JSONDecodeError):
-        return None
+        return {}
+
+    # Detect old format: top-level "marketplace" key with a string value
+    if isinstance(data.get("marketplace"), str) and isinstance(data.get("next_row_number"), int):
+        old_mp = data["marketplace"]
+        migrated = {old_mp: {k: v for k, v in data.items() if k != "marketplace"}}
+        _write_all_checkpoints(migrated)
+        return migrated
+
+    return data if isinstance(data, dict) else {}
+
+
+def _write_all_checkpoints(all_data: dict) -> None:
+    os.makedirs(_STATE_DIR, exist_ok=True)
+    with open(_CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+        json.dump(all_data, f, indent=2)
+
+
+def load_checkpoint(marketplace: str) -> dict | None:
+    """Return the saved checkpoint entry for marketplace, or None if absent."""
+    return _read_all_checkpoints().get(marketplace)
 
 
 def save_checkpoint(
@@ -104,9 +166,8 @@ def save_checkpoint(
     tokens_after: int | None,
     total_processed: int,
 ) -> None:
-    os.makedirs(_STATE_DIR, exist_ok=True)
-    payload = {
-        "marketplace": marketplace,
+    all_data = _read_all_checkpoints()
+    all_data[marketplace] = {
         "next_row_number": next_row,
         "last_processed_asin": last_asin,
         "last_success_at": datetime.datetime.now(_LONDON_TZ).strftime("%Y-%m-%d %H:%M:%S"),
@@ -119,8 +180,7 @@ def save_checkpoint(
             else None
         ),
     }
-    with open(_CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    _write_all_checkpoints(all_data)
 
 
 # ── Field extraction ──────────────────────────────────────────────────────────
@@ -323,7 +383,7 @@ def run_sheet_update(
 ) -> dict:
     """Run one update pass for the given marketplace.
 
-    marketplace:       'CA' (only CA is configured for MVP)
+    marketplace:       'US' | 'CA' | 'UK' | 'DE'
     max_asins:         max ASINs to process in this run
     dry_run:           query Keepa, show planned writes, skip Sheets write
     reset_checkpoint:  ignore existing checkpoint and start from first row
@@ -338,7 +398,8 @@ def run_sheet_update(
     tab = cfg["tab"]
     spreadsheet_id = cfg["spreadsheet_id"]
     first_row = cfg["first_data_row"]
-    locale = cfg["locale"]
+    locale = cfg["sheet_locale"]
+    keepa_domain = cfg["keepa_domain"]
     run_mode = "DRY-RUN" if dry_run else "LIVE"
 
     logger, log_path = _setup_logging()
@@ -494,7 +555,7 @@ def run_sheet_update(
             stats=90,
             history=False,
             buybox=True,
-            domain=marketplace,
+            domain=keepa_domain,
             progress_bar=False,
         )
     except Exception as exc:
