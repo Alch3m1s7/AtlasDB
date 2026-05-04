@@ -3,7 +3,7 @@ Description=Run Keepa CA updater hourly
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=60min
+OnUnitActiveSec=61min
 Persistent=true
 
 [Install]

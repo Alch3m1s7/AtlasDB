@@ -8,6 +8,6 @@ Type=oneshot
 User=keepa
 WorkingDirectory=/home/keepa/atlas
 EnvironmentFile=/home/keepa/atlas/.env
-ExecStart=/home/keepa/atlas/.venv/bin/python /home/keepa/atlas/src/main.py update-keepa-sheets --marketplace CA --max-asins 80
+ExecStart=/home/keepa/atlas/.venv/bin/python /home/keepa/atlas/src/main.py update-keepa-sheets --marketplace CA --max-asins 90
 StandardOutput=journal
 StandardError=journal
