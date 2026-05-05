@@ -37,6 +37,48 @@ Do not overengineer unless volume, security, or reliability clearly requires it.
 
 ---
 
+## Token & Agent Efficiency Rules
+
+Claude must minimise token usage and avoid unnecessary expensive reasoning.
+
+Before reading large files, Claude must first use cheap discovery methods:
+
+1. Use Grep/Glob/List to identify relevant files, functions, classes, imports, or call sites.
+2. Read only the smallest relevant file section or line range.
+3. Avoid reading entire large files unless explicitly necessary.
+4. Avoid spawning subagents for simple lookup, grep, summarisation, or single-file questions.
+5. Use subagents only for genuinely complex tasks such as security review, multi-file debugging, architecture review, test strategy, or independent second opinion.
+6. For simple questions, answer using direct tool calls and concise reasoning.
+7. If a task may exceed roughly 10k tokens, pause and state the cheaper plan before proceeding.
+8. Prefer deterministic commands over AI interpretation where possible.
+
+Examples:
+
+- "What functions exist in src/main.py?"
+  - Do: grep for `^def `, `^class `, and maybe argparse/command branches.
+  - Do not: read the full file or launch an Explore subagent.
+
+- "What does function X do?"
+  - Do: locate the function, read only that function and nearby helpers.
+  - Do not: summarise the whole file.
+
+- "Find where report generation happens"
+  - Do: grep for report names, command names, and relevant function calls.
+  - Do not: scan the whole repository with a subagent first.
+
+- "Refactor this module"
+  - Do: inspect structure first, propose a plan, then edit incrementally.
+  - Do not: rewrite large files without tests and a rollback plan.
+
+Default approach:
+Cheap search → narrow read → plan → minimal edit → test → summary.
+
+Cost efficiency must not override correctness, security, or task completion. If cheap discovery fails, if the task is security-sensitive, or if the solution requires deeper reasoning, escalate to a stronger model, subagent, or broader file review and briefly explain why.
+
+Do not stay stuck in cheap mode. After 2 failed attempts using cheap search or narrow reads, escalate: read broader context, use a specialised subagent, or ask for permission to use a more capable model/workflow.
+
+---
+
 ## Security Rules
 
 Never print, commit, or expose secrets.
