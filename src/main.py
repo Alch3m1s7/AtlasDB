@@ -60,7 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description="AtlasDB SP-API tool")
     parser.add_argument(
         "command",
-        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "import-ui-report", "keepa-manual-assist", "probe-keepa-api", "update-keepa-sheets", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
+        choices=["create", "status", "document", "download", "parse", "export", "insert", "query", "ingest-local", "ingest-spapi", "ingest-report", "export-sheets", "import-ui-report", "keepa-manual-assist", "probe-keepa-api", "update-keepa-sheets", "update-keepa-sheets-cycle", "probe-keepau-catalog", "probe-catalog-marketplaces", "probe-keepau-catalog-search", "probe-keepau-pricing-fees", "probe-marketplace-pricing-fees", "probe-pricing-access", "keepau-latest"],
         help="Command to run",
     )
     parser.add_argument(
@@ -695,6 +695,29 @@ def main():
             sys.exit(1)
         except Exception as exc:
             print(f"\n  UNHANDLED ERROR: {exc}")
+            sys.exit(1)
+
+        status = result.get("status", "?")
+        if status not in ("SUCCESS", "DRY_RUN", "NOTHING_TO_DO"):
+            sys.exit(1)
+
+    elif args.command == "update-keepa-sheets-cycle":
+        from keepa_sheets.cycle_manager import CycleLockError, run_cycle_step
+
+        max_asins = args.max_asins
+        dry_run = args.dry_run
+
+        if max_asins <= 0:
+            print("ERROR: --max-asins must be a positive integer.")
+            sys.exit(1)
+
+        try:
+            result = run_cycle_step(max_asins=max_asins, dry_run=dry_run)
+        except CycleLockError:
+            print("\n  ERROR: Another keepa-cycle run is already active. Exiting.")
+            sys.exit(1)
+        except (RuntimeError, Exception):
+            print("\n  ERROR: Keepa cycle failed. Check the log file for details.")
             sys.exit(1)
 
         status = result.get("status", "?")

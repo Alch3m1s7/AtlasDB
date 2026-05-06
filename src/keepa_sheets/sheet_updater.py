@@ -149,8 +149,10 @@ def _read_all_checkpoints() -> dict:
 
 def _write_all_checkpoints(all_data: dict) -> None:
     os.makedirs(_STATE_DIR, exist_ok=True)
-    with open(_CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+    tmp_path = _CHECKPOINT_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=2)
+    os.replace(tmp_path, _CHECKPOINT_FILE)
 
 
 def load_checkpoint(marketplace: str) -> dict | None:
@@ -509,10 +511,18 @@ def run_sheet_update(
             break
 
     batch_items = asin_rows[start_idx : start_idx + max_asins]
+    batch_truncated = False
 
     if not batch_items:
         logger.info("No ASINs in batch range — nothing to do.")
-        return {"status": "NOTHING_TO_DO", "marketplace": marketplace}
+        return {
+            "status": "NOTHING_TO_DO",
+            "marketplace": marketplace,
+            "max_asin_row": max_row,
+            "batch_last_row": None,
+            "checkpoint_saved": False,
+            "batch_truncated": False,
+        }
 
     batch_asins = [a for a, _ in batch_items]
     batch_rows = [r for _, r in batch_items]
@@ -542,6 +552,7 @@ def run_sheet_update(
         batch_asins = [a for a, _ in batch_items]
         batch_rows = [r for _, r in batch_items]
         required_tokens = len(batch_asins) * 3
+        batch_truncated = True
 
     logger.info(
         f"{'DRY-RUN: Would query' if dry_run else 'Querying'} "
@@ -675,6 +686,10 @@ def run_sheet_update(
             "tokens_after": tokens_after,
             "tokens_consumed": tokens_consumed,
             "log_path": log_path,
+            "max_asin_row": max_row,
+            "batch_last_row": batch_rows[-1],
+            "checkpoint_saved": False,
+            "batch_truncated": batch_truncated,
         }
 
     # ── Live write ────────────────────────────────────────────────────────────
@@ -691,6 +706,10 @@ def run_sheet_update(
             "tokens_after": tokens_after,
             "tokens_consumed": tokens_consumed,
             "log_path": log_path,
+            "max_asin_row": max_row,
+            "batch_last_row": batch_rows[-1],
+            "checkpoint_saved": False,
+            "batch_truncated": batch_truncated,
         }
 
     logger.info(
@@ -743,4 +762,8 @@ def run_sheet_update(
         "tokens_consumed": tokens_consumed,
         "next_row": next_row,
         "log_path": log_path,
+        "max_asin_row": max_row,
+        "batch_last_row": batch_rows[-1],
+        "checkpoint_saved": True,
+        "batch_truncated": batch_truncated,
     }
