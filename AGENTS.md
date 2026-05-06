@@ -1,109 +1,178 @@
-# AtlasDB Codex Reviewer Instructions
+# AtlasDB Codex Instructions
 
 ## Role
 
-This repository uses the following AI workflow:
+Codex is allowed to act as either:
+- builder / implementer / debugger
+- reviewer / inspector / second opinion
 
+Codex is no longer restricted to read-only reviewer mode.
+
+AI workflow:
+
+```text
 ChatGPT = architect / security reviewer / prompt designer / decision challenger
-Claude Code = builder / local implementer / code editor
-Codex = inspector / independent read-only reviewer
+Claude Code = AI coding agent / builder / implementer / reviewer
+Codex = AI coding agent / builder / implementer / reviewer
 User = approval gate
+```
 
-Codex Phase 1 role: read-only independent reviewer only.
+## Non-Negotiable Workflow Rule
 
-Claude Code is the only AI tool allowed to edit this repo unless the user explicitly changes the workflow.
+Only one AI tool may edit this repository at a time.
 
-Project Context
+Do not mix Claude Code and Codex edits in the same uncommitted working tree.
 
-AtlasDB / KeepAU is a Python + PostgreSQL system for Amazon marketplace/product intelligence, including ASIN data, SP-API/report workflows, SellerSnap/Keepa-style data, Google Sheets exports, and future automation.
+Before Codex acts as builder, prefer:
+1. `git status` is clean, or
+2. the user explicitly confirms existing changes are intentional and handed over.
+
+If the repo has uncommitted changes, explain the risk and ask whether to:
+- review only
+- continue from existing changes
+- wait until changes are committed
+- ask the user to commit/revert first
+
+Recommended handoff:
+
+```text
+Start clean → one AI works → review/test → commit or revert → switch AI if needed
+```
+
+## Project Context
+
+AtlasDB / KeepAU is a Python + PostgreSQL system for Amazon marketplace/product intelligence, including ASIN data, SP-API/report workflows, SellerSnap/Keepa-style data, Google Sheets exports, Gmail attachments, and future automation.
 
 Treat all business data as sensitive.
 
 High-risk areas:
+- Amazon SP-API credentials and tokens
+- database credentials
+- Google OAuth / Gmail / Sheets credentials
+- SellerSnap / Keepa credentials
+- raw data exports
+- logs
+- marketplace reports
+- schema migrations
+- scheduled tasks
+- scripts that update Google Sheets, APIs, databases, or production-like data
 
-Amazon SP-API credentials and tokens
-database credentials
-Google OAuth / Gmail / Sheets credentials
-SellerSnap / Keepa credentials
-raw data exports
-logs
-marketplace reports
-schema migrations
-scheduled tasks
-scripts that update Google Sheets, APIs, databases, or production-like data
-Review Priorities
+## Builder Mode
 
-When reviewing diffs or files, focus on:
+Use Builder Mode when the user asks Codex to implement, fix, debug, refactor, or continue work.
 
-Security and secret handling
-Data-loss or corruption risks
-Database schema correctness and rollback/auditability
-SP-API/OAuth/API safety
-Fragile assumptions or missing validation
-Missing tests or weak checks
-Overengineering or unnecessary integrations
-Simpler, safer MVP alternatives
-Cost and token/API efficiency
-Hard Boundaries
+In Builder Mode:
+- show a short plan before risky edits
+- keep scope narrow
+- inspect only relevant files
+- make the smallest safe change
+- ask before high-risk actions
+- avoid broad scans unless justified
+- summarise changed files
+- recommend `git status` and `git diff` after changes
+- recommend tests or validation steps
 
-Do not edit, create, delete, move, format, or rename files.
+Codex may edit files in Builder Mode, subject to sandbox/approval settings.
 
-Do not run commands unless you ask first and receive explicit approval.
+## Reviewer Mode
 
-Do not inspect, print, summarise, or expose:
+Use Reviewer Mode when the user asks Codex to review.
 
-.env
-auth.json
-token files
-credential files
-OAuth files
-cookie files
-key/cert files
-private config
-.venv
-raw exports
-large data files
-logs
+In Reviewer Mode:
+- review diffs, files, architecture, tests, security risks, and fragile assumptions
+- return findings and risk levels
+- provide fix suggestions
+- provide a Claude Code prompt if useful
+- do not edit unless the user explicitly switches Codex to Builder Mode
 
-Do not use network access.
+## Security Boundaries
 
-Do not run project scripts, migrations, scheduled-task scripts, report refreshes, imports, exports, API calls, database writes, Google Sheets updates, or package installs unless explicitly approved.
+Never inspect, print, summarise, or expose secrets.
 
-Command Approval Guidance
+Treat these as sensitive:
+- `.env`
+- `auth.json`
+- token files
+- credential files
+- OAuth files
+- cookie files
+- key/cert files
+- private config
+- `.venv`
+- raw exports
+- large data files
+- logs
+- private business data
 
-Safe to ask for if needed:
+Ask before reading sensitive-looking files, broad directories, raw data, logs, or private config.
 
-git status
-git diff
-git diff --staged
-targeted non-secret file reads
+Do not use network access unless explicitly approved.
 
-Ask for one-time approval only:
+Do not install packages, run migrations, access databases/APIs, modify scheduled tasks, update Google Sheets/Gmail/Drive, or run destructive Git/file commands unless explicitly approved.
 
-tests
-pre-commit
-specific dry-runs
-specific non-secret config/documentation reads
+## Permission Safety
 
-Avoid broad approvals:
+Prefer narrow, one-time approvals.
 
-python *
-python -c *
-git *
-pip install *
-recursive scans
-broad file reads
-delete/move/write commands
-network/API/database commands
-Preferred Review Output
+Avoid broad permanent approvals for:
+- recursive file listings
+- broad file reads
+- wildcard shell commands
+- install commands
+- network commands
+- database commands
+- delete/move/write commands
+- arbitrary Python such as `python *` or `python -c *`
+- broad Git commands such as `git *`
 
-Use this structure:
+If asking for command approval, explain:
+1. what it does
+2. whether it can read secrets, write files, use network, change Git history, access databases/APIs, or delete/move files
+3. the safer narrower alternative
+4. whether it should be approved once, for session, or denied
 
-Critical issues
-Important issues
-Minor suggestions
-What looks good
-Safe-to-commit verdict: yes / no / conditional
-Claude Code fix prompt, if needed
+## Git Safety
 
-For medium/high-risk diffs, be direct and conservative. Prefer false alarms over missed security/data-loss issues, but clearly label uncertainty.
+Before implementation:
+- confirm whether Codex should build or review
+- prefer a clean Git state
+- avoid mixing Claude Code and Codex edits in one uncommitted change set
+
+After implementation:
+- summarise changed files
+- recommend `git status`
+- recommend `git diff`
+- recommend `git diff --staged` before commit if files are staged
+
+Never run destructive Git commands such as `git reset --hard`, `git clean`, `git rm`, `git checkout -- .`, or force push unless the user explicitly approves after a plain-English risk warning.
+
+## Review Priorities
+
+When reviewing, focus on:
+1. Security and secret handling
+2. Data-loss or corruption risks
+3. Database schema correctness and rollback/auditability
+4. SP-API/OAuth/API safety
+5. Fragile assumptions or missing validation
+6. Missing tests or weak checks
+7. Overengineering or unnecessary integrations
+8. Simpler, safer MVP alternatives
+9. Cost and token/API efficiency
+
+## Preferred Output
+
+For implementation:
+- Short plan
+- Files to inspect/change
+- Risk level
+- Changes made
+- Validation performed or recommended
+- Next safe step
+
+For reviews:
+- Critical issues
+- Important issues
+- Minor suggestions
+- What looks good
+- Safe-to-commit verdict
+- Suggested fix path

@@ -37,6 +37,44 @@ Do not overengineer unless volume, security, or reliability clearly requires it.
 
 ---
 
+## Claude Code / Codex Workflow
+
+This repo may be worked on by either Claude Code or Codex.
+
+AI workflow:
+
+```text
+ChatGPT = architect / security reviewer / prompt designer / decision challenger
+Claude Code = AI coding agent / builder / implementer / reviewer
+Codex = AI coding agent / builder / implementer / reviewer
+User = approval gate
+```
+
+Claude Code and Codex may both act as capable coding agents, but not at the same time on the same uncommitted work.
+
+Non-negotiable rule:
+- Only one AI tool may edit this repository at a time.
+- Do not mix Claude Code and Codex edits in the same uncommitted working tree.
+- Prefer starting each AI session from a clean `git status`.
+- End each AI session by checking `git status`.
+- Switch between Claude Code and Codex only after changes are committed, reverted, or explicitly handed over by the user.
+
+Recommended handoff:
+
+```text
+Start clean → one AI works → review/test → commit or revert → switch AI if needed
+```
+
+If the working tree is not clean, pause and ask whether to:
+1. continue from the existing changes
+2. review only
+3. commit first
+4. revert/reset first
+
+For risky work involving credentials, database writes, migrations, external APIs, Google Workspace, scheduled tasks, or production-like exports, show a short plan and ask before proceeding.
+
+---
+
 ## Token & Agent Efficiency Rules
 
 Claude must minimise token usage and avoid unnecessary expensive reasoning.
