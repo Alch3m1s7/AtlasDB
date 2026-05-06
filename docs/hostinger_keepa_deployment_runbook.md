@@ -412,6 +412,203 @@ No AWS keys. No SP-API credentials. No SellerSnap credentials. No database passw
 
 ---
 
+---
+
+## 17. Phase 3 — Multi-market Keepa Cycle Deployment
+
+Switches the VPS from the CA-only timer (`keepa-updater-ca.timer`) to the
+multi-marketplace cycle timer (`keepa-updater-cycle.timer`).
+
+**Do not run the CA-only timer and the cycle timer at the same time.**
+The transition window where both are stopped is safe — the cycle timer fires
+on its own `OnBootSec=5min` trigger and catches up via `Persistent=true`.
+
+---
+
+### 17.1 Pull latest code on VPS
+
+```bash
+# On VPS, as user keepa
+cd /home/keepa/atlas
+git pull --ff-only
+```
+
+If `git pull` fails with "not possible to fast-forward", do not force-push or
+reset. Stop and investigate — the branch may have diverged.
+
+---
+
+### 17.2 Manual dry-run
+
+Queries Keepa and reads the active marketplace's sheet; writes nothing.
+
+```bash
+# On VPS, as user keepa
+cd /home/keepa/atlas
+export $(grep -v '^#' .env | xargs)
+source .venv/bin/activate
+python src/main.py update-keepa-sheets-cycle --max-asins 5 --dry-run
+```
+
+Expected output:
+- Active marketplace shown (defaults to CA if no cycle state file exists)
+- Keepa token balance printed
+- "DRY-RUN SUMMARY" block shown with planned writes
+- "Cycle NOT advanced: dry_run=True, no state written"
+- No errors
+
+If this fails, do not proceed to the live test.
+
+---
+
+### 17.3 Tiny live test (3 ASINs)
+
+Only run after the dry-run succeeds.
+
+```bash
+# On VPS, as user keepa
+python src/main.py update-keepa-sheets-cycle --max-asins 3
+```
+
+Check the cycle state file was created:
+
+```bash
+cat /home/keepa/atlas/data/state/keepa_cycle_state.json
+```
+
+Expected: `active_marketplace` is `CA` (or the next marketplace if CA just
+completed a full pass). The rolling checkpoint file is separate and unchanged
+from the CA-only timer's checkpoint.
+
+```bash
+cat /home/keepa/atlas/data/state/keepa_rolling_checkpoint.json
+```
+
+---
+
+### 17.4 Install new systemd files
+
+Run as **root**:
+
+```bash
+# On VPS, as root
+cp /home/keepa/atlas/deploy/systemd/keepa-updater-cycle.service /etc/systemd/system/
+cp /home/keepa/atlas/deploy/systemd/keepa-updater-cycle.timer   /etc/systemd/system/
+systemctl daemon-reload
+```
+
+---
+
+### 17.5 Disable the CA-only timer
+
+Stop and disable the CA-only timer **before** enabling the cycle timer.
+This prevents both timers running the same marketplace concurrently.
+
+```bash
+# On VPS, as root
+sudo systemctl disable --now keepa-updater-ca.timer
+```
+
+Confirm it is stopped:
+
+```bash
+systemctl status keepa-updater-ca.timer
+# Expected: "inactive (dead)"
+```
+
+---
+
+### 17.6 Start cycle service manually once
+
+Runs the cycle once synchronously so you can check logs before enabling the
+timer.
+
+```bash
+# On VPS, as root
+sudo systemctl start keepa-updater-cycle.service
+```
+
+---
+
+### 17.7 Check status and logs
+
+```bash
+# Service exit status
+sudo systemctl status keepa-updater-cycle.service --no-pager
+
+# Journal output from this run
+sudo journalctl -u keepa-updater-cycle.service -n 100 --no-pager
+```
+
+Expected: service exits with code 0, marketplace processed, checkpoint saved.
+
+---
+
+### 17.8 Enable the cycle timer
+
+```bash
+# On VPS, as root
+sudo systemctl enable --now keepa-updater-cycle.timer
+```
+
+---
+
+### 17.9 Confirm timers
+
+```bash
+systemctl list-timers 'keepa-updater*' --no-pager
+```
+
+Expected output shows only `keepa-updater-cycle.timer` active; the CA timer
+should be absent or inactive. The next trigger time should be roughly 61 minutes
+from now.
+
+---
+
+### 17.10 Rollback to CA-only timer
+
+If anything goes wrong, revert to the CA-only timer:
+
+```bash
+# On VPS, as root
+sudo systemctl disable --now keepa-updater-cycle.timer
+sudo systemctl enable --now keepa-updater-ca.timer
+```
+
+Confirm rollback:
+
+```bash
+systemctl list-timers 'keepa-updater*' --no-pager
+# Expected: keepa-updater-ca.timer active; cycle timer absent
+```
+
+The CA rolling checkpoint is unaffected — it persists in `keepa_rolling_checkpoint.json`
+and the CA-only service resumes from where it left off.
+
+---
+
+### 17.11 Manual verification checklist
+
+After enabling the cycle timer, confirm all of the following before treating
+the deployment as production-ready:
+
+- [ ] Missing cycle state file starts with `active_marketplace: CA` (default).
+- [ ] Existing CA rolling checkpoint is preserved — `keepa_rolling_checkpoint.json`
+      still contains the `CA` entry from the CA-only timer's runs.
+- [ ] Each timer run processes exactly one marketplace; the cycle state file
+      advances to the next marketplace only when all advancement conditions are met.
+- [ ] `keepa-updater-ca.timer` is disabled — confirm with
+      `systemctl is-enabled keepa-updater-ca.timer` returning `disabled`.
+- [ ] `keepa-updater-cycle.timer` is enabled — confirm with
+      `systemctl is-enabled keepa-updater-cycle.timer` returning `enabled`.
+- [ ] Only one timer fires at a time — `systemctl list-timers 'keepa-updater*'`
+      shows a single active timer.
+- [ ] `keepa_cycle_state.json` and `keepa_rolling_checkpoint.json` are separate
+      files (cycle state controls which marketplace is next; rolling checkpoint
+      stores per-marketplace row progress).
+
+---
+
 ## Appendix: Useful One-Liners
 
 ```bash

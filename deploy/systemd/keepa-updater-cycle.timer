@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Keepa multi-marketplace cycle every 61 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=61min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

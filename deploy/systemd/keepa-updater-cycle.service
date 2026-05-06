@@ -1,0 +1,13 @@
+[Unit]
+Description=Keepa sheet updater - multi-marketplace cycle (US/CA/UK/DE)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=keepa
+WorkingDirectory=/home/keepa/atlas
+EnvironmentFile=/home/keepa/atlas/.env
+ExecStart=/home/keepa/atlas/.venv/bin/python src/main.py update-keepa-sheets-cycle --max-asins 90
+StandardOutput=journal
+StandardError=journal
